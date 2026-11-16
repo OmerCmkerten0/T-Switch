@@ -1,0 +1,2098 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <!-- ═══ Main tabbed layout ═══ -->
+    <LinearLayout
+        android:id="@+id/tabbedRoot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Tab content area (fills space above bottom bar) -->
+        <FrameLayout
+            android:id="@+id/tabContent"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- ── TAB 0: Home (default view) ── -->
+            <LinearLayout
+                android:id="@+id/tabHome"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone"
+                android:padding="14dp">
+
+                <!-- Header -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingBottom="16dp">
+
+                    <ImageView
+                        android:layout_width="30dp"
+                        android:layout_height="30dp"
+                        android:src="@drawable/ic_tswitch_logo"
+                        android:layout_marginEnd="8dp"
+                        android:contentDescription="@string/app_name" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/app_name"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <TextView
+                        android:id="@+id/tvHomeStatusPill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:gravity="center"
+                        android:text="Aktif"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:contentDescription="Offline"
+                        android:background="@drawable/pill_bg"
+                        android:drawableStart="@drawable/ic_fa_globe"
+                        android:drawablePadding="6dp"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="0dp"
+                        android:layout_marginStart="10dp" />
+
+                    <!-- Height is pinned rather than wrapped: with no text these
+                         still reserve a default line box, which made them
+                         taller than the 34dp they are meant to share. -->
+                    <TextView
+                        android:id="@+id/tvHomeTlsBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:gravity="center"
+                        android:contentDescription="SIP signalling encrypted with TLS"
+                        android:background="@drawable/pill_bg"
+                        android:drawableStart="@drawable/ic_shield_lock"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="0dp"
+                        android:layout_marginStart="6dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/tvHomeSrtpBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:gravity="center"
+                        android:contentDescription="Call audio encrypted with SRTP"
+                        android:background="@drawable/pill_bg"
+                        android:drawableStart="@drawable/ic_fa_key"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="0dp"
+                        android:layout_marginStart="6dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/tvHomeMonitorBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="34dp"
+                        android:gravity="center"
+                        android:contentDescription="Call monitor"
+                        android:background="@drawable/pill_bg"
+                        android:drawableStart="@drawable/ic_fa_phone_volume"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="0dp"
+                        android:layout_marginStart="6dp"
+                        android:clickable="true"
+                        android:focusable="true" />
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="1dp"
+                        android:layout_weight="1" />
+
+                    <ImageButton
+                        android:id="@+id/btnHomeMenu"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_gear"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Menu" />
+                </LinearLayout>
+
+                <!-- Link state: the two networks this gateway depends on.
+                     Both legs matter — a call needs the modem for GSM and WiFi
+                     for SIP/RTP — so both are shown together. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:baselineAligned="false">
+
+                    <TextView
+                        android:id="@+id/tvNetMobile"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="—"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:background="@drawable/input_bg"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="9dp"
+                        android:layout_marginEnd="4dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+
+                    <TextView
+                        android:id="@+id/tvNetWifi"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="—"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:background="@drawable/input_bg"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="9dp"
+                        android:layout_marginStart="4dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+                </LinearLayout>
+
+                <!-- Synchronized Live Dashboard Summary Card -->
+                <LinearLayout
+                    android:id="@+id/cardHomeDashboard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/card_bg"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="11dp"
+                    android:layout_marginTop="10dp"
+                    android:clickable="true"
+                    android:focusable="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingBottom="6dp">
+
+                        <ImageView
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:src="@drawable/ic_tswitch_logo"
+                            android:layout_marginEnd="6dp"
+                            android:contentDescription="@string/app_name" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="CANLI SİSTEM PANELİ"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/accent" />
+
+                        <TextView
+                            android:id="@+id/tvDashSyncBadge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="● Senkronize"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:textColor="#34D399" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/tvDashSipState"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="SIP Köprüsü: tswitch.local:5060 · Aktif"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_primary"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+
+                    <TextView
+                        android:id="@+id/tvDashPushState"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="PushKit: t-switch_pusher → t-switch_receiver@sip.linphone.org"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:paddingTop="3dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+
+                    <TextView
+                        android:id="@+id/tvDashSimBattery"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="SIM &amp; Pil: Turkcell LTE · +905319004158"
+                        android:textSize="11sp"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_secondary"
+                        android:paddingTop="3dp"
+                        android:singleLine="true"
+                        android:ellipsize="end" />
+                </LinearLayout>
+
+                <!-- Filter chips.  wrap_content on purpose: the row is only as
+                     wide as its chips, so the weights below can only ever TAKE
+                     space (when four do not fit, LinearLayout shares the
+                     shortfall among the weighted chips), never hand out spare
+                     width — which stretched Incoming/Outgoing with empty sides. -->
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="4dp">
+
+                    <!-- Four chips on one line, all at their natural width.  If a
+                         narrow screen or a large font leaves too little room,
+                         Incoming and Outgoing (weighted) shrink and cut their
+                         label with …; All and SMS never do. -->
+                    <android.widget.Button
+                        android:id="@+id/btnFilterAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:text="Tümü"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="#052E16"
+                        android:background="@drawable/pill_bg"
+                        android:backgroundTint="#34D399"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:layout_marginEnd="6dp" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnFilterIncoming"
+                        android:layout_width="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_height="38dp"
+                        android:text="Gelen"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_primary"
+                        android:background="@drawable/pill_bg"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:layout_marginEnd="6dp" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnFilterOutgoing"
+                        android:layout_width="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_height="38dp"
+                        android:text="Giden"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_primary"
+                        android:background="@drawable/pill_bg"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:layout_marginEnd="6dp" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnFilterSms"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:text="SMS"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="@color/text_primary"
+                        android:background="@drawable/pill_bg"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:maxLines="1"
+                        android:ellipsize="end" />
+                </LinearLayout>
+
+                <!-- Everything below the chips scrolls; the header and the
+                     filter chips stay put so they are reachable while reading
+                     a long call list. -->
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                    <!-- Active call -->
+                    <LinearLayout
+                        android:id="@+id/homeCallCard"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:background="@drawable/card_bg"
+                        android:padding="16dp"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="● ACTIVE CALL"
+                                android:textSize="13sp"
+                                android:textStyle="bold"
+                                android:textColor="#34D399" />
+
+                            <TextView
+                                android:id="@+id/tvHomeCallDirection"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="GSM → SIP"
+                                android:textSize="11sp"
+                                android:textColor="@color/text_secondary"
+                                android:background="@drawable/input_bg"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="4dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvHomeCallTimer"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="00:00"
+                            android:textSize="44sp"
+                            android:textStyle="bold"
+                            android:fontFamily="monospace"
+                            android:textColor="@color/text_primary"
+                            android:paddingTop="10dp" />
+
+                        <TextView
+                            android:id="@+id/tvHomeCallFrom"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="—"
+                            android:textSize="20sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_primary"
+                            android:paddingTop="6dp" />
+
+                        <TextView
+                            android:id="@+id/tvHomeCallTo"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text=""
+                            android:textSize="14sp"
+                            android:textColor="#60A5FA"
+                            android:paddingTop="2dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:paddingTop="16dp">
+
+                            <!-- Icon over label: the label carries the state
+                                 (Mute/Unmute, Snoop/Stop), the icon makes the
+                                 three actions distinguishable at a glance. -->
+                            <android.widget.Button
+                                android:id="@+id/btnHomeMute"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="Mute"
+                                android:textSize="11sp"
+                                android:textColor="@color/text_primary"
+                                android:background="@drawable/soft_btn_bg"
+                                android:backgroundTint="@color/btn_secondary"
+                                android:stateListAnimator="@null"
+                                android:drawableTop="@drawable/ic_fa_volume_xmark"
+                                android:drawablePadding="2dp"
+                                android:paddingTop="8dp"
+                                android:paddingBottom="6dp"
+                                android:layout_marginEnd="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+
+                            <android.widget.Button
+                                android:id="@+id/btnHomeSnoop"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="Snoop"
+                                android:textSize="11sp"
+                                android:textColor="@color/text_primary"
+                                android:background="@drawable/soft_btn_bg"
+                                android:backgroundTint="@color/btn_secondary"
+                                android:stateListAnimator="@null"
+                                android:drawableTop="@drawable/ic_fa_headphones"
+                                android:drawablePadding="2dp"
+                                android:paddingTop="8dp"
+                                android:paddingBottom="6dp"
+                                android:layout_marginHorizontal="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+
+                            <android.widget.Button
+                                android:id="@+id/btnHomeEnd"
+                                android:layout_width="0dp"
+                                android:layout_height="62dp"
+                                android:layout_weight="1"
+                                android:text="End"
+                                android:textSize="11sp"
+                                android:textColor="#FFFFFF"
+                                android:background="@drawable/soft_btn_bg"
+                                android:backgroundTint="#B91C1C"
+                                android:stateListAnimator="@null"
+                                android:drawableTop="@drawable/ic_fa_phone_slash"
+                                android:drawablePadding="2dp"
+                                android:paddingTop="8dp"
+                                android:paddingBottom="6dp"
+                                android:layout_marginStart="4dp"
+                                android:minHeight="0dp"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <!-- Recent calls -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="SON ARAMALAR &amp; MESAJLAR"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:textColor="@color/text_secondary" />
+
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/homeTrafficList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+
+                    <TextView
+                        android:id="@+id/tvHomeTrafficEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Henüz arama veya mesaj yok"
+                        android:textSize="13sp"
+                        android:textColor="@color/text_hint"
+                        android:paddingVertical="14dp" />
+                    </LinearLayout>
+                </ScrollView>
+
+            </LinearLayout>
+
+            <!-- ── Settings (full screen, replaces the old modal) ── -->
+            <LinearLayout
+                android:id="@+id/tabConfig"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:padding="14dp">
+
+                    <ImageButton
+                        android:id="@+id/btnConfigBack"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_arrow_back"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Back" />
+
+                    <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="8dp"
+                        android:src="@drawable/ic_tswitch_logo"
+                        android:contentDescription="@string/app_name" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Ayarlar"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <TextView
+                        android:id="@+id/tvCfgVersion"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/pill_bg"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="4dp"
+                        android:layout_marginEnd="8dp"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_label" />
+
+                    <!-- Live event log — SIP registration, calls, GSM and
+                         network transitions.  The old settings screen showed
+                         it inline; it has its own screen now, reached here. -->
+                    <ImageButton
+                        android:id="@+id/btnCfgLogs"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_logs"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Logs" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/svConfig"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:descendantFocusability="beforeDescendants"
+                        android:focusableInTouchMode="true"
+                        android:paddingHorizontal="14dp"
+                        android:paddingBottom="20dp">
+
+                        <!-- Soft Rounded "Kiosk & Local Send Otomasyonu" Card at top of Settings -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_bg"
+                            android:padding="14dp"
+                            android:layout_marginTop="4dp"
+                            android:layout_marginBottom="8dp">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Kiosk &amp; Local Send Otomasyonu"
+                                android:textSize="13sp"
+                                android:textStyle="bold"
+                                android:textColor="@color/accent"
+                                android:paddingBottom="10dp" />
+
+                            <!-- One-Tap Local Send (Hotspot Zoiper) Card -->
+                            <LinearLayout
+                                android:id="@+id/cardHomeLocalSend"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical"
+                                android:background="@drawable/input_bg"
+                                android:padding="12dp">
+
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal"
+                                    android:gravity="center_vertical">
+
+                                    <LinearLayout
+                                        android:layout_width="0dp"
+                                        android:layout_height="wrap_content"
+                                        android:layout_weight="1"
+                                        android:orientation="vertical">
+
+                                        <TextView
+                                            android:id="@+id/tvHomeLocalSendTitle"
+                                            android:layout_width="wrap_content"
+                                            android:layout_height="wrap_content"
+                                            android:text="Local Send (Hotspot Zoiper)"
+                                            android:textSize="14sp"
+                                            android:textStyle="bold"
+                                            android:textColor="@color/text_primary" />
+
+                                        <TextView
+                                            android:id="@+id/tvHomeLocalSendStatus"
+                                            android:layout_width="wrap_content"
+                                            android:layout_height="wrap_content"
+                                            android:text="Kapalı — İnternetsiz yerel SIP köprüsü"
+                                            android:textSize="11sp"
+                                            android:fontFamily="monospace"
+                                            android:textColor="@color/text_secondary"
+                                            android:paddingTop="2dp" />
+                                    </LinearLayout>
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeTerminalPing"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:text="0000"
+                                        android:textSize="11sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/text_primary"
+                                        android:background="@drawable/pill_bg"
+                                        android:backgroundTint="@color/btn_secondary"
+                                        android:stateListAnimator="@null"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="12dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp"
+                                        android:layout_marginEnd="6dp"
+                                        android:visibility="gone" />
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeLocalSendToggle"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:text="AÇ"
+                                        android:textSize="12sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/accent_on"
+                                        android:background="@drawable/pill_bg"
+                                        android:backgroundTint="@color/accent"
+                                        android:stateListAnimator="@null"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="16dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp" />
+                                </LinearLayout>
+                            </LinearLayout>
+
+                            <!-- Kiosk Launcher, mDNS, Debloat & Quick Automation Card -->
+                            <LinearLayout
+                                android:id="@+id/cardHomeKiosk"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="vertical"
+                                android:background="@drawable/input_bg"
+                                android:padding="12dp"
+                                android:layout_marginTop="10dp">
+
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal"
+                                    android:gravity="center_vertical">
+
+                                    <LinearLayout
+                                        android:layout_width="0dp"
+                                        android:layout_height="wrap_content"
+                                        android:layout_weight="1"
+                                        android:orientation="vertical">
+
+                                        <TextView
+                                            android:id="@+id/tvHomeKioskTitle"
+                                            android:layout_width="wrap_content"
+                                            android:layout_height="wrap_content"
+                                            android:text="Kiosk Launcher &amp; Otomasyon"
+                                            android:textSize="13sp"
+                                            android:textStyle="bold"
+                                            android:textColor="@color/text_primary" />
+
+                                        <TextView
+                                            android:id="@+id/tvHomeKioskSub"
+                                            android:layout_width="wrap_content"
+                                            android:layout_height="wrap_content"
+                                            android:text="tswitch.local · Fallback: Açık"
+                                            android:textSize="11sp"
+                                            android:fontFamily="monospace"
+                                            android:textColor="@color/text_secondary"
+                                            android:paddingTop="2dp" />
+                                    </LinearLayout>
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeKioskToggle"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:text="Kiosk Aç"
+                                        android:textSize="11sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/accent_on"
+                                        android:background="@drawable/pill_bg"
+                                        android:backgroundTint="@color/accent"
+                                        android:stateListAnimator="@null"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="14dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp" />
+                                </LinearLayout>
+
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal"
+                                    android:layout_marginTop="10dp">
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeDebloat"
+                                        android:layout_width="0dp"
+                                        android:layout_height="38dp"
+                                        android:layout_weight="1"
+                                        android:text="Debloat"
+                                        android:textSize="11sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/text_primary"
+                                        android:background="@drawable/soft_btn_bg"
+                                        android:backgroundTint="@color/btn_secondary"
+                                        android:stateListAnimator="@null"
+                                        android:drawableStart="@drawable/ic_bolt_soft"
+                                        android:drawablePadding="4dp"
+                                        android:singleLine="true"
+                                        android:ellipsize="end"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="8dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp"
+                                        android:layout_marginEnd="6dp" />
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeQueryGb"
+                                        android:layout_width="0dp"
+                                        android:layout_height="38dp"
+                                        android:layout_weight="1"
+                                        android:text="Kalan GB"
+                                        android:textSize="11sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/text_primary"
+                                        android:background="@drawable/soft_btn_bg"
+                                        android:backgroundTint="@color/btn_secondary"
+                                        android:stateListAnimator="@null"
+                                        android:drawableStart="@drawable/ic_signal_soft"
+                                        android:drawablePadding="4dp"
+                                        android:singleLine="true"
+                                        android:ellipsize="end"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="8dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp"
+                                        android:layout_marginEnd="6dp" />
+
+                                    <android.widget.Button
+                                        android:id="@+id/btnHomeScreenOff"
+                                        android:layout_width="0dp"
+                                        android:layout_height="38dp"
+                                        android:layout_weight="1"
+                                        android:text="Ekran Kapat"
+                                        android:textSize="11sp"
+                                        android:textStyle="bold"
+                                        android:textAllCaps="false"
+                                        android:textColor="@color/text_primary"
+                                        android:background="@drawable/soft_btn_bg"
+                                        android:backgroundTint="@color/btn_secondary"
+                                        android:stateListAnimator="@null"
+                                        android:drawableStart="@drawable/ic_screen_off_soft"
+                                        android:drawablePadding="4dp"
+                                        android:singleLine="true"
+                                        android:ellipsize="end"
+                                        android:minWidth="0dp"
+                                        android:minHeight="0dp"
+                                        android:paddingHorizontal="8dp"
+                                        android:insetTop="0dp"
+                                        android:insetBottom="0dp" />
+                                </LinearLayout>
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <!-- Soft Rounded "Linphone Hibrit PushKit & SIP Hesapları" Card -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:background="@drawable/card_bg"
+                            android:padding="14dp"
+                            android:layout_marginTop="4dp"
+                            android:layout_marginBottom="8dp">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical"
+                                android:paddingBottom="6dp">
+
+                                <ImageView
+                                    android:layout_width="18dp"
+                                    android:layout_height="18dp"
+                                    android:src="@drawable/ic_tswitch_logo"
+                                    android:layout_marginEnd="8dp"
+                                    android:contentDescription="@string/app_name" />
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="Linphone Hibrit PushKit (iPhone Uyandırıcı)"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold"
+                                    android:textColor="@color/accent" />
+
+                                <TextView
+                                    android:id="@+id/tvCfgPushStatusBadge"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="Hazır"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold"
+                                    android:background="@drawable/pill_bg"
+                                    android:paddingHorizontal="10dp"
+                                    android:paddingVertical="3dp"
+                                    android:textColor="@color/text_primary" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="iPhone ekranı kilitliyken gelen GSM aramasında GM 8 (t-switch_pusher) → iPhone (t-switch_receiver@sip.linphone.org) üzerinden Apple PushKit uyandırma sinyali gönderir; iPhone uyanınca sesi yerel ağdan (tswitch.local) taşır."
+                                android:textSize="11sp"
+                                android:textColor="@color/text_hint"
+                                android:paddingBottom="8dp" />
+
+                            <CheckBox
+                                android:id="@+id/cbCfgPushEnabled"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Hibrit Apple PushKit uyandırma aktif"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <TextView style="@style/CfgLabel" android:text="Linphone SIP Domain" />
+                            <EditText
+                                android:id="@+id/etCfgPushDomain"
+                                style="@style/CfgField"
+                                android:hint="sip.linphone.org"
+                                android:text="sip.linphone.org"
+                                android:inputType="textUri" />
+
+                            <TextView style="@style/CfgLabel" android:text="GM 8 Gönderici Hesabı (Pusher)" />
+                            <EditText
+                                android:id="@+id/etCfgPushPusher"
+                                style="@style/CfgField"
+                                android:hint="t-switch_pusher"
+                                android:text="t-switch_pusher"
+                                android:inputType="text" />
+
+                            <TextView style="@style/CfgLabel" android:text="t-switch_pusher Şifresi (sip.linphone.org)" />
+                            <EditText
+                                android:id="@+id/etCfgPushPass"
+                                style="@style/CfgField"
+                                android:hint="t-switch_pusher şifresini girin"
+                                android:inputType="textPassword" />
+
+                            <TextView style="@style/CfgLabel" android:text="iPhone Alıcı Hesabı (Receiver)" />
+                            <EditText
+                                android:id="@+id/etCfgPushReceiver"
+                                style="@style/CfgField"
+                                android:hint="t-switch_receiver"
+                                android:text="t-switch_receiver"
+                                android:inputType="text" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal"
+                                android:layout_marginTop="10dp">
+
+                                <android.widget.Button
+                                    android:id="@+id/btnCfgPushSave"
+                                    android:layout_width="0dp"
+                                    android:layout_height="40dp"
+                                    android:layout_weight="1"
+                                    android:text="Push Kaydet"
+                                    android:textSize="12sp"
+                                    android:textStyle="bold"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/accent_on"
+                                    android:background="@drawable/soft_btn_bg"
+                                    android:backgroundTint="@color/accent"
+                                    android:stateListAnimator="@null"
+                                    android:layout_marginEnd="6dp"
+                                    android:insetTop="0dp"
+                                    android:insetBottom="0dp" />
+
+                                <android.widget.Button
+                                    android:id="@+id/btnCfgPushTest"
+                                    android:layout_width="0dp"
+                                    android:layout_height="40dp"
+                                    android:layout_weight="1"
+                                    android:text="PushKit Test"
+                                    android:textSize="12sp"
+                                    android:textStyle="bold"
+                                    android:textAllCaps="false"
+                                    android:textColor="@color/text_primary"
+                                    android:background="@drawable/soft_btn_bg"
+                                    android:backgroundTint="@color/btn_secondary"
+                                    android:stateListAnimator="@null"
+                                    android:layout_marginStart="6dp"
+                                    android:insetTop="0dp"
+                                    android:insetBottom="0dp" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView style="@style/CfgLabel" android:text="Görünüm / Tema (T-Noktası)" />
+                        <RadioGroup
+                            android:id="@+id/rgCfgTheme"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:layout_marginTop="4dp">
+
+                            <RadioButton
+                                android:id="@+id/rbThemeSystem"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:text="Sistem"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbThemeLight"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:text="Açık"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbThemeDark"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:text="Koyu"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+                        </RadioGroup>
+
+                        <TextView style="@style/CfgLabel" android:text="Local Send (Hotspot Üzerinden İnternetsiz Zoiper)" />
+                        <CheckBox
+                            android:id="@+id/cbCfgLocalSend"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Local Send aktif (Hotspot yerel SIP sunucusu)"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="4dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Hotspot açıkken mobil veri kapalı olsa bile bağlı Zoiper cihazı doğrudan bu cihazın Hotspot IP'si (örn. 192.168.43.1:5060, kullanıcı: tswitch) üzerinden internetsiz arama ve mesaj alır/gönderir."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="4dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Kritik Batarya Uyarı Eşiği (%)" />
+                        <EditText
+                            android:id="@+id/etCfgCritBattery"
+                            style="@style/CfgField"
+                            android:hint="15"
+                            android:inputType="number" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Şarjda değilken batarya bu seviyeye ve altına indiğinde her %1 düşüşte Zoiper'deki 0000 (T-Switch Terminal) kanalına SMS hakkı harcamadan anlık sahte SMS uyarısı düşer."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="4dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Zoiper Sahte SMS Komut Kanalı (0000) Özel Komutları" />
+                        <EditText
+                            android:id="@+id/etCfgCustomCmds"
+                            style="@style/CfgField"
+                            android:hint="!uptime = uptime&#10;!ip = ip -4 addr show"
+                            android:inputType="textMultiLine|textNoSuggestions"
+                            android:minLines="3"
+                            android:gravity="top|start" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Zoiper'de 0000 numarasına mesaj atarak dahili komutları (!batarya, !internet, !geneldurum, !snoop, !yardim), yukarıdaki özel komutları veya doğrudan root bash komutlarını ($ komut) çalıştırabilirsiniz."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="4dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Server" />
+                        <EditText android:id="@+id/etCfgServer" style="@style/CfgField"
+                            android:hint="sip.linphone.org" android:inputType="textUri" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Port" />
+                        <EditText android:id="@+id/etCfgPort" style="@style/CfgField"
+                            android:hint="5060" android:inputType="number" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Username" />
+                        <EditText android:id="@+id/etCfgUser" style="@style/CfgField"
+                            android:hint="t-switch_pusher" android:inputType="text" />
+
+                        <TextView style="@style/CfgLabel" android:text="SIP Password" />
+                        <EditText android:id="@+id/etCfgPass" style="@style/CfgField"
+                            android:hint="password" android:inputType="textPassword" />
+
+                        <TextView style="@style/CfgLabel" android:text="Own Number (SIM)" />
+                        <!-- One field per active SIM, built at runtime: the
+                             slots a device has, and which of them hold a live
+                             SIM, are only knowable on the device. -->
+                        <LinearLayout
+                            android:id="@+id/llCfgOwnNumbers"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Sent as the SIP destination so the server can map the call to an assistant. Without it the gateway addresses its own extension and the call loops back."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Audio Codec" />
+
+                        <RadioGroup
+                            android:id="@+id/rgCfgCodec"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:layout_marginTop="4dp">
+
+                            <RadioButton
+                                android:id="@+id/rbCodecG722"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.722 only — wideband 16 kHz (recommended)"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbCodecBoth"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.722 preferred, G.711 allowed"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+
+                            <RadioButton
+                                android:id="@+id/rbCodecG711"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="G.711 only — narrowband 8 kHz"
+                                android:buttonTint="@color/accent"
+                                android:textColor="@color/text_label" />
+                        </RadioGroup>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Offering G.711 alongside G.722 usually means the server picks G.711 and every call is narrowband, which is why G.722 alone is the default."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <TextView style="@style/CfgLabel" android:text="Agent Volume" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:layout_marginTop="4dp">
+
+                            <SeekBar
+                                android:id="@+id/sbCfgAgentVolume"
+                                android:layout_width="0dp"
+                                android:layout_weight="1"
+                                android:layout_height="wrap_content"
+                                android:max="6"
+                                android:progress="3"
+                                android:progressTint="@color/accent"
+                                android:thumbTint="@color/accent" />
+
+                            <TextView
+                                android:id="@+id/tvCfgAgentVolume"
+                                android:layout_width="44dp"
+                                android:layout_height="wrap_content"
+                                android:gravity="end"
+                                android:text="0"
+                                android:textStyle="bold"
+                                android:textColor="@color/text_label"
+                                android:paddingStart="8dp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="How loud the agent is to the GSM caller. 0 is what the detected device asks for; each step roughly a third louder or quieter. Raise it if callers say the agent is faint, lower it if the line distorts."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+
+                        <CheckBox
+                            android:id="@+id/cbCfgAutoconnect"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Autoconnect on startup"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="16dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgUseStun"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Use STUN"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Finds the public IP so SIP and RTP survive NAT. Turn off for a SIP server on the local network."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgTls"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Enable TLS"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Encrypts SIP signalling — registration, calls and SMS text. Call audio (RTP) is not encrypted either way. The server must offer TLS, usually on port 5061."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgSrtp"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Encrypt audio (SRTP)"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:id="@+id/tvCfgSrtpHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="SDES-keyed SRTP (RFC 3711). Requires TLS: the keys travel inside the SIP signalling, so over plain UDP they would be readable by anyone on the path."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgTranslit"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="ASCII-only outgoing SMS"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Rewrites accents before sending: für becomes fuer. Turn on if umlauts arrive mangled. Cyrillic, Hebrew, Arabic and other non-Latin text is never rewritten — it is sent as-is."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <CheckBox
+                            android:id="@+id/cbCfgCallMonitor"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Call monitor"
+                            android:buttonTint="@color/accent"
+                            android:textColor="@color/text_label"
+                            android:layout_marginTop="8dp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Puts every call on Snoop automatically: caller and agent both play on this phone's speaker. The microphone stays muted. Snoop can still be switched off during a call."
+                            android:textSize="12sp"
+                            android:textColor="@color/text_hint"
+                            android:paddingTop="6dp" />
+
+                        <android.widget.Button
+                            android:id="@+id/btnCfgClearRecents"
+                            android:layout_width="wrap_content"
+                            android:layout_gravity="center_horizontal"
+                            android:layout_height="40dp"
+                            android:text="CLEAR RECENTS"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:paddingStart="22dp"
+                            android:paddingEnd="22dp"
+                            android:textColor="#F87171"
+                            android:background="@drawable/pill_bg"
+                            android:backgroundTint="@color/btn_secondary"
+                            android:stateListAnimator="@null"
+                            android:layout_marginTop="24dp"
+                            android:layout_marginBottom="20dp"
+                            android:minHeight="0dp"
+                            android:minWidth="0dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp" />
+
+                        <android.widget.Button
+                            android:id="@+id/btnCfgSave"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:text="KAYDET &amp; UYGULA"
+                            android:textStyle="bold"
+                            android:textColor="@color/accent_on"
+                            android:background="@drawable/soft_btn_bg"
+                            android:backgroundTint="@color/accent"
+                            android:stateListAnimator="@null"
+                            android:layout_marginTop="0dp"
+                            android:minHeight="0dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp" />
+                    </LinearLayout>
+                </ScrollView>
+            </LinearLayout>
+
+            <!-- ── Logs (reached from the Settings header) ── -->
+            <LinearLayout
+                android:id="@+id/tabLogs"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:background="@color/background"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:padding="14dp">
+
+                    <ImageButton
+                        android:id="@+id/btnLogsBack"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_arrow_back"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Back" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Logs"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary"
+                        android:paddingStart="12dp" />
+
+                    <ImageButton
+                        android:id="@+id/btnLogsCopy"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_copy"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Copy log"
+                        android:layout_marginEnd="8dp" />
+
+                    <ImageButton
+                        android:id="@+id/btnLogsClear"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_trash"
+                        android:scaleType="centerInside"
+                        android:background="@drawable/soft_btn_bg"
+                        android:contentDescription="Clear log" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/svLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/card_bg"
+                    android:padding="12dp"
+                    android:layout_marginHorizontal="14dp"
+                    android:layout_marginBottom="14dp">
+
+                    <TextView
+                        android:id="@+id/tvLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_log"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:textIsSelectable="true"
+                        android:text="" />
+                </ScrollView>
+            </LinearLayout>
+
+
+            <!-- ── TAB: Tuş Takımı (Dialer) ── -->
+            <LinearLayout
+                android:id="@+id/tabDialer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingBottom="12dp">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:src="@drawable/ic_tswitch_logo"
+                        android:layout_marginEnd="8dp"
+                        android:contentDescription="@string/app_name" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Telefon &amp; SMS Tuş Takımı"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/card_bg"
+                    android:paddingHorizontal="14dp"
+                    android:paddingVertical="10dp">
+
+                    <EditText
+                        android:id="@+id/etDialerInput"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="Numara girin (05xx...)"
+                        android:textSize="24sp"
+                        android:textStyle="bold"
+                        android:fontFamily="monospace"
+                        android:textColor="@color/text_primary"
+                        android:textColorHint="@color/text_hint"
+                        android:background="@null"
+                        android:inputType="phone"
+                        android:singleLine="true" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnDialerBackspace"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:text=""
+                        android:background="@drawable/circle_btn_bg"
+                        android:backgroundTint="@color/btn_secondary"
+                        android:drawableTop="@drawable/ic_backspace_soft"
+                        android:drawableTint="@color/text_primary"
+                        android:paddingTop="10dp"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:contentDescription="Sil" />
+                </LinearLayout>
+
+                <GridLayout
+                    android:id="@+id/glDialerPad"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:columnCount="3"
+                    android:rowCount="4"
+                    android:layout_marginTop="10dp"
+                    android:layout_marginBottom="10dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <android.widget.Button
+                        android:id="@+id/btnDialerCall"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:text="GSM Ara"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="#FFFFFF"
+                        android:background="@drawable/soft_btn_bg"
+                        android:backgroundTint="@color/call_green"
+                        android:drawableStart="@drawable/ic_call_filled"
+                        android:drawableTint="#FFFFFF"
+                        android:drawablePadding="8dp"
+                        android:paddingHorizontal="20dp"
+                        android:stateListAnimator="@null"
+                        android:layout_marginEnd="6dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnDialerSms"
+                        android:layout_width="0dp"
+                        android:layout_height="54dp"
+                        android:layout_weight="1"
+                        android:text="SMS Gönder"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="#FFFFFF"
+                        android:background="@drawable/soft_btn_bg"
+                        android:backgroundTint="@color/sms_blue"
+                        android:drawableStart="@drawable/ic_sms_filled"
+                        android:drawableTint="#FFFFFF"
+                        android:drawablePadding="8dp"
+                        android:paddingHorizontal="18dp"
+                        android:stateListAnimator="@null"
+                        android:layout_marginStart="6dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ── TAB: Rehber (Contacts & Quick SMS) ── -->
+            <LinearLayout
+                android:id="@+id/tabContacts"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:padding="14dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingBottom="10dp">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:src="@drawable/ic_tswitch_logo"
+                        android:layout_marginEnd="8dp"
+                        android:contentDescription="@string/app_name" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Rehber &amp; Hızlı SMS"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <android.widget.Button
+                        android:id="@+id/btnContactsNewSms"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:text="Yeni SMS"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textAllCaps="false"
+                        android:textColor="@color/accent_on"
+                        android:background="@drawable/pill_bg"
+                        android:backgroundTint="@color/accent"
+                        android:drawableStart="@drawable/ic_sms_filled"
+                        android:drawableTint="@color/accent_on"
+                        android:drawablePadding="6dp"
+                        android:stateListAnimator="@null"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingHorizontal="14dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp" />
+                </LinearLayout>
+
+                <EditText
+                    android:id="@+id/etContactsSearch"
+                    style="@style/CfgField"
+                    android:hint="İsim veya numara ara..."
+                    android:inputType="text"
+                    android:singleLine="true"
+                    android:layout_marginBottom="10dp" />
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
+                        android:id="@+id/llContactsList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+            </LinearLayout>
+
+        </FrameLayout>
+
+        <!-- ── Bottom Kiosk Navigation Bar ── -->
+        <LinearLayout
+            android:id="@+id/bottomNavBar"
+            android:layout_width="match_parent"
+            android:layout_height="68dp"
+            android:orientation="horizontal"
+            android:background="@color/surface"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="6dp"
+            android:gravity="center_vertical">
+
+            <android.widget.Button
+                android:id="@+id/btnNavHome"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="Ana Ekran"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/accent_on"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/accent"
+                android:drawableTop="@drawable/ic_nav_home"
+                android:drawablePadding="2dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="4dp"
+                android:paddingHorizontal="2dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginEnd="6dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnNavDialer"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="Tuşlar"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_nav_dialer"
+                android:drawablePadding="2dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="4dp"
+                android:paddingHorizontal="2dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginEnd="6dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnNavContacts"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="Rehber"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_nav_contacts"
+                android:drawablePadding="2dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="4dp"
+                android:paddingHorizontal="2dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:layout_marginEnd="6dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnNavConfig"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="Ayarlar"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_nav_settings"
+                android:drawablePadding="2dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="4dp"
+                android:paddingHorizontal="2dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ═══ Dedicated Full-Screen GM 8 Local Call UI (Fallback & Local Dialer Calls) ═══ -->
+    <LinearLayout
+        android:id="@+id/localInCallView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/background"
+        android:padding="20dp"
+        android:visibility="gone"
+        android:gravity="center_horizontal">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/pill_bg"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="6dp"
+            android:layout_marginTop="12dp">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_tswitch_logo"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="@string/app_name" />
+
+            <TextView
+                android:id="@+id/tvLocalCallBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="GM 8 YEREL ARAMA"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#34D399" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvLocalCallName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Bilinmeyen Numara"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:gravity="center"
+            android:paddingTop="18dp"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvLocalCallNumber"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="+90..."
+            android:textSize="18sp"
+            android:fontFamily="monospace"
+            android:textColor="@color/text_secondary"
+            android:gravity="center"
+            android:paddingTop="4dp" />
+
+        <TextView
+            android:id="@+id/tvLocalCallReason"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="12sp"
+            android:textColor="#60A5FA"
+            android:gravity="center"
+            android:paddingTop="4dp" />
+
+        <TextView
+            android:id="@+id/tvLocalCallTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textSize="42sp"
+            android:textStyle="bold"
+            android:fontFamily="monospace"
+            android:textColor="@color/text_primary"
+            android:paddingVertical="12dp" />
+
+        <!-- In-call DTMF Keypad (toggled via Tuşlar button) -->
+        <GridLayout
+            android:id="@+id/glLocalInCallDtmf"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:columnCount="3"
+            android:rowCount="4"
+            android:visibility="gone"
+            android:layout_marginVertical="6dp" />
+
+        <View
+            android:id="@+id/vLocalCallSpacer"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Audio & DTMF Controls (Speaker, Mic Mute, Keypad) -->
+        <LinearLayout
+            android:id="@+id/llLocalCallControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <android.widget.Button
+                android:id="@+id/btnLocalSpeaker"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:text="Hoparlör"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_speaker_soft"
+                android:drawablePadding="4dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="6dp"
+                android:stateListAnimator="@null"
+                android:layout_marginEnd="6dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnLocalMute"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:text="Sessiz"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_mic_off_soft"
+                android:drawablePadding="4dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="6dp"
+                android:stateListAnimator="@null"
+                android:layout_marginHorizontal="4dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnLocalKeypad"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
+                android:text="Tuşlar"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/soft_btn_bg"
+                android:backgroundTint="@color/btn_secondary"
+                android:drawableTop="@drawable/ic_nav_dialer"
+                android:drawablePadding="4dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="6dp"
+                android:stateListAnimator="@null"
+                android:layout_marginStart="6dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+        </LinearLayout>
+
+        <!-- Ringing Answer / Reject Row -->
+        <LinearLayout
+            android:id="@+id/llLocalRingingActions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <android.widget.Button
+                android:id="@+id/btnLocalReject"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:text="Reddet"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/pill_bg"
+                android:backgroundTint="@color/call_red"
+                android:drawableStart="@drawable/ic_call_end_filled"
+                android:drawableTint="#FFFFFF"
+                android:drawablePadding="8dp"
+                android:paddingHorizontal="20dp"
+                android:stateListAnimator="@null"
+                android:layout_marginEnd="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+
+            <android.widget.Button
+                android:id="@+id/btnLocalAnswer"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:text="Cevapla"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/pill_bg"
+                android:backgroundTint="@color/call_green"
+                android:drawableStart="@drawable/ic_call_filled"
+                android:drawableTint="#FFFFFF"
+                android:drawablePadding="8dp"
+                android:paddingHorizontal="20dp"
+                android:stateListAnimator="@null"
+                android:layout_marginStart="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp" />
+        </LinearLayout>
+
+        <!-- Active/Dialing Hangup Button -->
+        <android.widget.Button
+            android:id="@+id/btnLocalHangup"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:text="Aramayı Kapat"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/pill_bg"
+            android:backgroundTint="@color/call_red"
+            android:drawableStart="@drawable/ic_call_end_filled"
+            android:drawableTint="#FFFFFF"
+            android:drawablePadding="8dp"
+            android:paddingHorizontal="24dp"
+            android:stateListAnimator="@null"
+            android:visibility="gone"
+            android:layout_marginBottom="16dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
+    </LinearLayout>
+
+    <!-- ═══ Full-screen in-call overlay (above everything, hidden by default) ═══ -->
+    <LinearLayout
+        android:id="@+id/inCallView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/background"
+        android:visibility="gone"
+        android:gravity="center_horizontal">
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <ImageView
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:src="@drawable/ic_tswitch_logo"
+            android:layout_marginBottom="8dp"
+            android:contentDescription="@string/app_name" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_full_name"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:textColor="@color/accent"
+            android:paddingBottom="12dp" />
+
+        <TextView
+            android:id="@+id/tvInCallStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Calling..."
+            android:textSize="16sp"
+            android:textColor="@color/text_secondary" />
+
+        <TextView
+            android:id="@+id/tvInCallNumber"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="32sp"
+            android:textColor="@color/text_primary"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:paddingVertical="16dp"
+            android:paddingHorizontal="24dp"
+            android:maxLines="1"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="18sp"
+            android:autoSizeMaxTextSize="32sp" />
+
+        <TextView
+            android:id="@+id/tvInCallTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textSize="48sp"
+            android:textColor="@color/text_primary"
+            android:fontFamily="monospace"
+            android:paddingVertical="24dp"
+            android:visibility="gone" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Listen in on both sides through the speaker.  Does not touch the
+             microphone, which stays muted for the whole call. -->
+        <android.widget.Button
+            android:id="@+id/btnInCallMonitor"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginBottom="12dp"
+            android:text="LISTEN IN"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/pill_bg"
+            android:backgroundTint="@color/sms_blue"
+            android:stateListAnimator="@null"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
+
+        <android.widget.Button
+            android:id="@+id/btnInCallEnd"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginBottom="32dp"
+            android:text="END CALL"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/pill_bg"
+            android:backgroundTint="@color/call_red"
+            android:stateListAnimator="@null"
+            android:minHeight="0dp"
+            android:insetTop="0dp"
+            android:insetBottom="0dp" />
+    </LinearLayout>
+
+</FrameLayout>

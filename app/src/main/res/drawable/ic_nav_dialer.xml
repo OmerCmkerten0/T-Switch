@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Clean 3x3 + bottom keypad dots icon -->
+    <path
+        android:fillColor="@color/text_primary"
+        android:pathData="M6,3.5A1.75,1.75 0 1,1 6,7A1.75,1.75 0 1,1 6,3.5ZM12,3.5A1.75,1.75 0 1,1 12,7A1.75,1.75 0 1,1 12,3.5ZM18,3.5A1.75,1.75 0 1,1 18,7A1.75,1.75 0 1,1 18,3.5ZM6,9.25A1.75,1.75 0 1,1 6,12.75A1.75,1.75 0 1,1 6,9.25ZM12,9.25A1.75,1.75 0 1,1 12,12.75A1.75,1.75 0 1,1 12,9.25ZM18,9.25A1.75,1.75 0 1,1 18,12.75A1.75,1.75 0 1,1 18,9.25ZM6,15A1.75,1.75 0 1,1 6,18.5A1.75,1.75 0 1,1 6,15ZM12,15A1.75,1.75 0 1,1 12,18.5A1.75,1.75 0 1,1 12,15ZM18,15A1.75,1.75 0 1,1 18,18.5A1.75,1.75 0 1,1 18,15ZM12,19.75A1.5,1.5 0 1,1 12,22.75A1.5,1.5 0 1,1 12,19.75Z" />
+</vector>

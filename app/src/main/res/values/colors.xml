@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand: Inspired by tnoktasi.com.tr vibrant orange (#FF6B00) + soft modern slate -->
+    <color name="accent">#FF6B00</color>
+    <color name="accent_on">#FFFFFF</color>
+    <color name="accent_soft">#FFF2E8</color>
+
+    <color name="primary">#FF6B00</color>
+    <color name="primary_dark">#E05A00</color>
+
+    <!-- Backgrounds (Light mode — soft airy cool slate) -->
+    <color name="background">#F4F7FB</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_soft">#F8FAFC</color>
+
+    <!-- Text (Light mode) -->
+    <color name="text_primary">#0F172A</color>
+    <color name="text_label">#334155</color>
+    <color name="text_secondary">#64748B</color>
+    <color name="text_log">#334155</color>
+    <color name="text_hint">#94A3B8</color>
+
+    <!-- Buttons (Light mode: soft slate so dark text_primary is crisp and legible) -->
+    <color name="btn_secondary">#EDF2F7</color>
+
+    <!-- Borders (Light mode — subtle soft borders, no harsh lines) -->
+    <color name="border_input">#E2E8F0</color>
+    <color name="border_card">#E8EEF5</color>
+
+    <!-- Badges & Action semantic colors -->
+    <color name="tls_badge">#D97706</color>
+    <color name="srtp_badge">#2563EB</color>
+    <color name="monitor_badge">#DC2626</color>
+    <color name="call_green">#16A34A</color>
+    <color name="call_red">#DC2626</color>
+    <color name="sms_blue">#2563EB</color>
+
+    <!-- Status bar -->
+    <color name="status_bar">#F4F7FB</color>
+</resources>

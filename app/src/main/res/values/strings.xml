@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">T-Switch</string>
+    <string name="app_full_name">T-Noktası Gsm Call Switcher</string>
+    <string name="activity_title">T-Switch</string>
+    <string name="channel_name">T-Switch Service</string>
+    <string name="channel_description">T-Noktası Gsm Call Switcher — Keeps SIP &amp; Local Send active</string>
+    <string name="channel_name_quiet">T-Switch Service (silent)</string>
+    <string name="channel_description_quiet">T-Noktası Gsm Call Switcher — Keeps SIP &amp; Local Send active without status bar noise</string>
+    <string name="notification_title">T-Switch</string>
+    <string name="notification_text_registered">Registered — Ready</string>
+    <string name="notification_text_unregistered">Connecting…</string>
+    <string name="notification_text_call">Call active</string>
+</resources>

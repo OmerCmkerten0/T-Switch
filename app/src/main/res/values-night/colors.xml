@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand: tnoktasi.com.tr orange adapted for dark surfaces -->
+    <color name="accent">#FF7A1A</color>
+    <color name="accent_on">#FFFFFF</color>
+
+    <color name="primary">#FF7A1A</color>
+    <color name="primary_dark">#EA580C</color>
+
+    <!-- Backgrounds (Dark mode) -->
+    <color name="background">#0B1120</color>
+    <color name="surface">#1E293B</color>
+
+    <!-- Badges -->
+    <color name="tls_badge">#FACC15</color>
+    <color name="srtp_badge">#60A5FA</color>
+    <color name="monitor_badge">#EF4444</color>
+
+    <!-- Text (Dark mode) -->
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_label">#E2E8F0</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_log">#CBD5E1</color>
+    <color name="text_hint">#64748B</color>
+
+    <!-- Buttons (Dark mode) -->
+    <color name="btn_secondary">#334155</color>
+
+    <!-- Borders (Dark mode) -->
+    <color name="border_input">#475569</color>
+    <color name="border_card">#334155</color>
+
+    <!-- Status bar -->
+    <color name="status_bar">#0B1120</color>
+</resources>
