@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Looper
 import android.util.Log
 import com.callagent.gateway.DeviceProfile
 import com.callagent.gateway.RootShell
@@ -126,9 +127,37 @@ class RtpSession(
         } catch (_: Exception) {}
     }
 
-    // Symmetric RTP: latch onto the actual source address of received packets
-    @Volatile private var latchedAddr: InetAddress? = null
-    @Volatile private var latchedPort: Int = 0
+    private data class RemoteEndpoint(val addr: InetAddress, val port: Int)
+
+    // Symmetric RTP: latch onto the actual source address of received packets,
+    // or switch cleanly when an in-dialog re-INVITE updates the remote media endpoint.
+    @Volatile private var latchedEndpoint: RemoteEndpoint? = null
+    private val endpointLock = Any()
+
+    /**
+     * Thread-safe update of the remote RTP destination for in-dialog re-INVITE handover.
+     * Resolves [addr] off the main thread if invoked on it and ignores non-positive ports.
+     */
+    fun updateRemoteEndpoint(addr: String, port: Int) {
+        if (addr.isBlank() || port <= 0) return
+        val apply = Runnable {
+            try {
+                val resolved = InetAddress.getByName(addr)
+                synchronized(endpointLock) {
+                    latchedEndpoint = RemoteEndpoint(resolved, port)
+                }
+                Log.i(TAG, "Updated remote RTP endpoint to ${resolved.hostAddress}:$port")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to resolve updated remote endpoint $addr:$port: ${e.message}")
+            }
+        }
+        val mainLooper = try { Looper.getMainLooper() } catch (_: Throwable) { null }
+        if (mainLooper != null && Looper.myLooper() == mainLooper) {
+            Thread(apply, "RTP-EndpointUpdate").start()
+        } else {
+            apply.run()
+        }
+    }
 
     // Jitter buffer for received packets.  Capacity 8 (160ms) absorbs
     // network jitter without audible gaps.  The playback loop drains
@@ -254,7 +283,7 @@ class RtpSession(
         // Send initial RTP keepalive to punch NAT pinhole before audio starts
         try {
             val remoteInet = InetAddress.getByName(remoteAddr)
-            val silence = RtpPacket(payloadType, 0, 0, txSsrc, ByteArray(160)).encode()
+            val silence = RtpPacket(payloadType, 0, 0, txSsrc, silencePayloadForCodec()).encode()
             sendRtp(silence, remoteInet, remotePort)
             Log.i(TAG, "Sent NAT punch-through packet to $remoteAddr:$remotePort")
         } catch (e: Exception) {
@@ -776,20 +805,24 @@ class RtpSession(
      * sequencing (txSequence/txTimestamp) so captureLoop() can take
      * over seamlessly when AudioRecord finally initializes.
      */
+    private fun silencePayloadForCodec(): ByteArray = when (payloadType) {
+        RtpPacket.PT_PCMA -> ByteArray(160) { 0xD5.toByte() }  // A-law silence
+        RtpPacket.PT_PCMU -> ByteArray(160) { PcmuCodec.SILENCE_BYTE }  // µ-law silence
+        else -> ByteArray(160)  // G.722: zeros → near-silence
+    }
+
     private fun sendSilencePackets(durationMs: Long, defaultRemoteInet: InetAddress) {
         val intervalMs = 20L  // one RTP frame = 20ms
         val end = System.currentTimeMillis() + durationMs
 
         // Pre-encode silence for the negotiated codec (reused every frame)
-        val silencePayload = when (payloadType) {
-            RtpPacket.PT_PCMA -> ByteArray(160) { 0xD5.toByte() }  // A-law silence
-            else -> ByteArray(160)  // G.722: zeros → near-silence
-        }
+        val silencePayload = silencePayloadForCodec()
 
         while (System.currentTimeMillis() < end && running.get()) {
             try {
-                val destAddr = latchedAddr ?: defaultRemoteInet
-                val destPort = if (latchedAddr != null) latchedPort else remotePort
+                val ep = latchedEndpoint
+                val destAddr = ep?.addr ?: defaultRemoteInet
+                val destPort = ep?.port ?: remotePort
 
                 val packet = RtpPacket(payloadType, txSequence, txTimestamp, txSsrc, silencePayload)
                 val data = packet.encode()
@@ -1198,14 +1231,16 @@ class RtpSession(
                         if (captureRate == 8000) PcmaCodec.encode8k(pcmBuf)
                         else PcmaCodec.encode(pcmBuf)
                     }
+                    RtpPacket.PT_PCMU -> PcmuCodec.encode(pcmBuf)
                     else -> {
                         val pcm16k = if (captureRate == 8000) upsample8kTo16k(pcmBuf) else pcmBuf
                         g722Encoder.encode(pcm16k)
                     }
                 }
 
-                val destAddr = latchedAddr ?: defaultRemoteInet
-                val destPort = if (latchedAddr != null) latchedPort else remotePort
+                val ep = latchedEndpoint
+                val destAddr = ep?.addr ?: defaultRemoteInet
+                val destPort = ep?.port ?: remotePort
 
                 val packet = RtpPacket(payloadType, txSequence, txTimestamp, txSsrc, encoded)
                 val data = packet.encode()
@@ -1278,10 +1313,13 @@ class RtpSession(
                 }
 
                 // Symmetric RTP: latch onto the actual source address
-                if (latchedAddr == null && srcAddr != null) {
-                    latchedAddr = srcAddr
-                    latchedPort = srcPort
-                    Log.i(TAG, "Symmetric RTP: latched to ${srcAddr.hostAddress}:$srcPort")
+                if (latchedEndpoint == null && srcAddr != null && srcPort > 0) {
+                    synchronized(endpointLock) {
+                        if (latchedEndpoint == null) {
+                            latchedEndpoint = RemoteEndpoint(srcAddr, srcPort)
+                            Log.i(TAG, "Symmetric RTP: latched to ${srcAddr.hostAddress}:$srcPort")
+                        }
+                    }
                 }
 
                 lastRtpReceivedTime = System.currentTimeMillis()
@@ -1685,6 +1723,12 @@ class RtpSession(
     private fun playbackLoop() {
         val track = audioTrack ?: return
 
+        // Mute speaker DAC/digital volumes and route Incall_Music via ALSA mixer
+        // synchronously BEFORE track.play() starts outputting audio, so the HAL
+        // cannot burst unmuted initial audio out of the loudspeaker.
+        enableIncallMusicViaMixer()
+        if (!running.get()) return
+
         // No prefill — the silence-frame loop below feeds the AudioTrack
         // continuously, preventing underruns.  Removing the old 20ms prefill
         // saves that much initial latency.
@@ -1704,11 +1748,6 @@ class RtpSession(
         if (!profile.incallMusicBeforeTrack) {
             enableIncallMusic()
         }
-        // Set mixer controls via root — also handles Voice Tx Mute=0.
-        // No separate ensureVoiceTxOpen() call here: the mixer thread below
-        // already issues that command, and waiting for su -c was blocking
-        // the playback thread for ~100ms.
-        enableIncallMusicViaMixer()
 
         // Silence frame for when jitter buffer is empty — prevents underruns
         // that cause BUFFER TIMEOUT and AudioTrack disable/restart cycles.
@@ -1751,13 +1790,14 @@ class RtpSession(
                 }
 
                 // Decode based on codec.  G.722 outputs 16 kHz natively;
-                // PCMA always decodes to 8 kHz (playbackRate==8000).
+                // PCMA/PCMU always decode to 8 kHz (playbackRate==8000).
                 val pcm = when (payloadType) {
                     RtpPacket.PT_G722 -> g722Decoder.decodeToBytes(encoded)
                     RtpPacket.PT_PCMA -> {
                         if (playbackRate == 8000) PcmaCodec.decode8k(encoded)
                         else PcmaCodec.decode(encoded)
                     }
+                    RtpPacket.PT_PCMU -> PcmuCodec.decode(encoded)
                     else -> g722Decoder.decodeToBytes(encoded)
                 }
 
@@ -1980,19 +2020,17 @@ class RtpSession(
             listener?.onRtpStats(msg)
             return
         }
-        Thread({
-            try {
-                // Just the routing commands.  This used to append a readback of
-                // four 'ABOX ...' controls, which exist only on Exynos — on
-                // every call, on a Qualcomm device, that was four more root
-                // round-trips during audio setup to print "Invalid mixer ctl".
-                val output = RootShell.execForOutput(resolvedMixerCmd, timeoutMs = 8000)
-                if (output.isNotBlank()) Log.i(TAG, "Mixer incall_music: $output")
-            } catch (e: Exception) {
-                Log.w(TAG, "Mixer fallback failed: ${e.message}")
-                listener?.onRtpStats("Mixer incall_music FAILED: ${e.message}")
-            }
-        }, "RTP-Mixer").start()
+        try {
+            // Just the routing commands.  This used to append a readback of
+            // four 'ABOX ...' controls, which exist only on Exynos — on
+            // every call, on a Qualcomm device, that was four more root
+            // round-trips during audio setup to print "Invalid mixer ctl".
+            val output = RootShell.execForOutput(resolvedMixerCmd, timeoutMs = 8000)
+            if (output.isNotBlank()) Log.i(TAG, "Mixer incall_music: $output")
+        } catch (e: Exception) {
+            Log.w(TAG, "Mixer fallback failed: ${e.message}")
+            listener?.onRtpStats("Mixer incall_music FAILED: ${e.message}")
+        }
     }
 
     /**
