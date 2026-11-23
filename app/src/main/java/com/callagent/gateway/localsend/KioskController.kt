@@ -224,6 +224,10 @@ object KioskController {
         } else {
             RootShell.execWithStatus("settings put global low_power 0", timeoutMs = 5_000)
             RootShell.execWithStatus("settings put global low_power_sticky 0", timeoutMs = 5_000)
+            RootShell.execWithStatus("settings put system screen_off_timeout 60000", timeoutMs = 5_000)
+            RootShell.execWithStatus("settings put global window_animation_scale 1.0", timeoutMs = 3_000)
+            RootShell.execWithStatus("settings put global transition_animation_scale 1.0", timeoutMs = 3_000)
+            RootShell.execWithStatus("settings put global animator_duration_scale 1.0", timeoutMs = 3_000)
             RootShell.execWithStatus("cmd netpolicy set restrict-background false", timeoutMs = 5_000)
 
             val (_, pkgOut) = RootShell.execWithStatus("pm list packages -3", timeoutMs = 8_000)
@@ -266,14 +270,13 @@ object KioskController {
         val (_, out) = RootShell.execWithStatus(script, timeoutMs = 25_000)
         lastHomeCheckMs = 0L
         val disabledCount = out.lines().count { it.contains("disabled-user", ignoreCase = true) }
-            .coerceAtLeast(GM8_BLOAT_PACKAGES.size)
         context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
             .edit().putInt(PREF_DEBLOATED_COUNT, disabledCount).apply()
         val memLine = out.lines().lastOrNull { it.contains("Mem:", ignoreCase = true) }?.trim() ?: ""
 
         return buildString {
             appendLine("⚡ [GM 8 Debloat & Hızlandırma Tamamlandı]")
-            appendLine("• Devre Dışı Bırakılan Bloatware: ${GM8_BLOAT_PACKAGES.size} paket")
+            appendLine("• Devre Dışı Bırakılan Bloatware: $disabledCount paket")
             appendLine("• Sistem Animasyonları: 0.0x (Anında Geçiş)")
             appendLine("• Varsayılan Ana Ekran: T-Switch Launcher ✅")
             if (memLine.isNotEmpty()) append("• Bellek (MB): $memLine")

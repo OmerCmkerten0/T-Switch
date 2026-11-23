@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.telecom.Call
 import android.telecom.DisconnectCause
 import android.telecom.CallAudioState
@@ -70,7 +71,30 @@ object GsmCallManager {
     @Volatile var localSpeakerOn: Boolean = false; private set
     @Volatile var localMicMuted: Boolean = false; private set
     @Volatile private var fallbackRingtone: Ringtone? = null
+    @Volatile private var fallbackWakeLock: PowerManager.WakeLock? = null
     @Volatile var onLocalFallbackStateChanged: ((Call?, String?) -> Unit)? = null
+
+    /**
+     * Pure call-waiting guard: returns true only when there is no live active/ringing/dialing
+     * call that would be overwritten by a secondary incoming call.
+     */
+    fun shouldReplaceActiveCall(currentActiveExists: Boolean, currentState: Int): Boolean {
+        if (!currentActiveExists) return true
+        return currentState == Call.STATE_DISCONNECTED || currentState == Call.STATE_DISCONNECTING
+    }
+
+    /**
+     * Pure teardown guard: audio bridge teardown and activeCall reset must run ONLY when the
+     * removed Telecom Call is the tracked activeCall, never for a rejected 2nd incoming call.
+     */
+    fun shouldRestoreAudioOnRemove(removedMatchesActive: Boolean): Boolean = removedMatchesActive
+
+    /**
+     * Pure Kiosk auto-sleep guard: only turn the screen back off after an incoming local-fallback
+     * call finishes AND no new active or ringing call is currently in progress.
+     */
+    fun shouldAutoSleepAfterLocalCall(direction: String, hasActiveOrRingingCall: Boolean): Boolean =
+        direction.equals("IN", ignoreCase = true) && !hasActiveOrRingingCall
 
     @Volatile var listener: Listener? = null
 
@@ -124,12 +148,17 @@ object GsmCallManager {
 
     fun onCallAdded(call: Call, service: InCallService) {
         inCallService = service
-        activeCall = call
-        activeCallState = call.state
-        lastDisconnectCause = null
-        // Release the previous call's object; the dedupe only needs to span
-        // one call's own disconnect.
-        endedCall = null
+        val replaceActive = shouldReplaceActiveCall(activeCall != null, activeCallState)
+        if (replaceActive) {
+            activeCall = call
+            activeCallState = call.state
+            lastDisconnectCause = null
+            // Release the previous call's object; the dedupe only needs to span
+            // one call's own disconnect.
+            endedCall = null
+        } else {
+            Log.i(TAG, "Secondary GSM call added while activeCall is live (state=$activeCallState) — preserving activeCall")
+        }
 
         val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
 
@@ -139,11 +168,13 @@ object GsmCallManager {
                 // Silence the ringtone immediately — this is a gateway device,
                 // not a user-facing phone.  The call will be auto-answered
                 // once the SIP leg is established.
-                try {
-                    val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                    am.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Ringer silence failed: ${e.message}")
+                if (localFallbackCall !== call) {
+                    try {
+                        val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        am.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Ringer silence failed: ${e.message}")
+                    }
                 }
                 listener?.onIncomingGsmCall(call, number)
             }
@@ -157,7 +188,9 @@ object GsmCallManager {
                     localCallConnectedAtMs = 0L
                     localSpeakerOn = false
                     localMicMuted = false
-                    onLocalFallbackStateChanged?.invoke(call, number)
+                    Handler(Looper.getMainLooper()).post {
+                        onLocalFallbackStateChanged?.invoke(call, number)
+                    }
                 }
             }
             Call.STATE_ACTIVE -> {
@@ -166,8 +199,10 @@ object GsmCallManager {
                     if (localCallConnectedAtMs == 0L) localCallConnectedAtMs = System.currentTimeMillis()
                     stopFallbackRingtone()
                     applyLocalHandsetAudio(service)
-                    onLocalFallbackStateChanged?.invoke(call, number)
-                } else {
+                    Handler(Looper.getMainLooper()).post {
+                        onLocalFallbackStateChanged?.invoke(call, number)
+                    }
+                } else if (activeCall === call) {
                     configureAudioBridge()
                 }
                 listener?.onGsmCallActive(call)
@@ -250,16 +285,21 @@ object GsmCallManager {
             appLog("CALL: GM 8 yerel görüşme tamamlandı ($num, ${durSec}s)")
             clearLocalFallback(restoreScreenIfKiosk = true)
         }
-        if (activeCall == call) {
+        val matchesActive = activeCall === call
+        if (shouldRestoreAudioOnRemove(matchesActive)) {
             activeCall = null
             activeCallState = Call.STATE_DISCONNECTED
+            restoreAudio()
+        } else {
+            Log.i(TAG, "Removed GSM call is not activeCall — preserving activeCall and audio bridge")
         }
-        restoreAudio()
         notifyCallEnded(call)
     }
 
     fun onCallStateChanged(call: Call, state: Int) {
-        activeCallState = state
+        if (activeCall === call) {
+            activeCallState = state
+        }
 
         when (state) {
             Call.STATE_RINGING -> {
@@ -268,7 +308,33 @@ object GsmCallManager {
                 // the orchestrator never learns about the incoming call.
                 val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
                 Log.i(TAG, "GSM call ringing: $number (via state change)")
+                if (localFallbackCall !== call) {
+                    inCallService?.let { service ->
+                        try {
+                            val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            am.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Ringer silence failed: ${e.message}")
+                        }
+                    }
+                }
                 listener?.onIncomingGsmCall(call, number)
+            }
+            Call.STATE_DIALING, Call.STATE_CONNECTING -> {
+                val number = call.details?.handle?.schemeSpecificPart ?: "unknown"
+                Log.i(TAG, "Outgoing GSM call to $number (via state change)")
+                if (markNextOutgoingAsLocal) {
+                    markNextOutgoingAsLocal = false
+                    localFallbackCall = call
+                    localCallDirection = "OUT"
+                    localCallCreatedAtMs = System.currentTimeMillis()
+                    localCallConnectedAtMs = 0L
+                    localSpeakerOn = false
+                    localMicMuted = false
+                    Handler(Looper.getMainLooper()).post {
+                        onLocalFallbackStateChanged?.invoke(call, number)
+                    }
+                }
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active")
@@ -276,23 +342,31 @@ object GsmCallManager {
                     if (localCallConnectedAtMs == 0L) localCallConnectedAtMs = System.currentTimeMillis()
                     stopFallbackRingtone()
                     inCallService?.let { applyLocalHandsetAudio(it) }
-                    onLocalFallbackStateChanged?.invoke(call, callerOf(call).first)
-                } else {
+                    val num = callerOf(call).first
+                    Handler(Looper.getMainLooper()).post {
+                        onLocalFallbackStateChanged?.invoke(call, num)
+                    }
+                } else if (activeCall === call) {
                     configureAudioBridge()
                 }
                 listener?.onGsmCallActive(call)
             }
             Call.STATE_DISCONNECTED -> {
-                lastDisconnectCause = try {
-                    call.details?.disconnectCause
-                } catch (e: Exception) {
-                    Log.w(TAG, "Disconnect cause unavailable: ${e.message}")
-                    null
+                val isTracked = (activeCall === call || activeCall == null)
+                if (isTracked) {
+                    lastDisconnectCause = try {
+                        call.details?.disconnectCause
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Disconnect cause unavailable: ${e.message}")
+                        null
+                    }
+                    Log.i(TAG, "GSM call disconnected (cause=${lastDisconnectCause?.code})")
+                } else {
+                    Log.i(TAG, "Secondary GSM call disconnected — preserving activeCall state")
                 }
-                Log.i(TAG, "GSM call disconnected (cause=${lastDisconnectCause?.code})")
                 notifyCallEnded(call)
-                if (activeCall == call) {
-                    activeCall = null
+                if (activeCall === call) {
+                    activeCallState = Call.STATE_DISCONNECTED
                 }
             }
         }
@@ -908,7 +982,9 @@ object GsmCallManager {
 
     /** Get current call number */
     val currentNumber: String?
-        get() = activeCall?.details?.handle?.schemeSpecificPart
+        get() = activeCall
+            ?.takeIf { activeCallState != Call.STATE_DISCONNECTED }
+            ?.details?.handle?.schemeSpecificPart
 
     fun isLocalFallbackCall(call: Call?): Boolean = call != null && localFallbackCall === call
 
@@ -928,15 +1004,17 @@ object GsmCallManager {
 
         // 0. Immediately acquire a WakeLock in-process so the physical screen turns on in <5ms
         runCatching {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            fallbackWakeLock?.let { if (it.isHeld) it.release() }
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")
             val wl = pm.newWakeLock(
-                android.os.PowerManager.FULL_WAKE_LOCK or
-                    android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                    android.os.PowerManager.ON_AFTER_RELEASE,
+                PowerManager.FULL_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE,
                 "tswitch:fallback_incall"
             )
             wl.acquire(25_000L)
+            fallbackWakeLock = wl
         }
 
         // 1. Restore audible ringer & play default ringtone
@@ -1012,18 +1090,41 @@ object GsmCallManager {
     }
 
     fun clearLocalFallback(restoreScreenIfKiosk: Boolean = false) {
+        val savedDirection = localCallDirection
         stopFallbackRingtone()
+        runCatching {
+            fallbackWakeLock?.let { if (it.isHeld) it.release() }
+        }
+        fallbackWakeLock = null
+        inCallService?.let { ctx ->
+            runCatching {
+                val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                am.mode = AudioManager.MODE_NORMAL
+            }
+        }
         markNextOutgoingAsLocal = false
         localFallbackCall = null
         localSpeakerOn = false
         localMicMuted = false
-        onLocalFallbackStateChanged?.invoke(null, null)
+        Handler(Looper.getMainLooper()).post {
+            onLocalFallbackStateChanged?.invoke(null, null)
+        }
         if (restoreScreenIfKiosk) {
             inCallService?.let { ctx ->
                 if (com.callagent.gateway.localsend.KioskController.isKioskEnabled(ctx)) {
                     kotlin.concurrent.thread(name = "kiosk-sleep-after-call") {
-                        Thread.sleep(1500)
-                        com.callagent.gateway.localsend.KioskController.setScreenOn(ctx, false)
+                        try {
+                            Thread.sleep(1500)
+                        } catch (_: InterruptedException) {
+                            return@thread
+                        }
+                        val hasLiveCall = (activeCall != null &&
+                            activeCallState != Call.STATE_DISCONNECTED &&
+                            activeCallState != Call.STATE_DISCONNECTING) ||
+                            localFallbackCall != null
+                        if (shouldAutoSleepAfterLocalCall(savedDirection, hasLiveCall)) {
+                            com.callagent.gateway.localsend.KioskController.setScreenOn(ctx, false)
+                        }
                     }
                 }
             }

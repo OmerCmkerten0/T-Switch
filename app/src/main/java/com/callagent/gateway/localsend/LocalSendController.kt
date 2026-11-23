@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.callagent.gateway.RootShell
 import com.callagent.gateway.gsm.GsmCallManager
 import com.callagent.gateway.service.CallLogEntry
@@ -355,7 +356,7 @@ object LocalSendController {
                     action = GatewayService.ACTION_MONITOR
                     putExtra(GatewayService.EXTRA_MONITOR_ON, next)
                 }
-                runCatching { context.startService(intent) }
+                runCatching { ContextCompat.startForegroundService(context, intent) }
                 return if (next) {
                     "🔊 [T-Switch] Çağrı Hoparlör Dinleme (Snoop): AÇILDI ✅"
                 } else {
@@ -579,6 +580,10 @@ object LocalSendController {
             subId = subId
         )
         SmsOutbox.add(context, sms)
+        if (!SmsOutbox.claimForDispatch(context, sms.id)) {
+            Log.w(TAG, "queryTurkcellRemainingGb: outbox entry ${sms.id} already claimed, skipping duplicate dispatch")
+            return "❌ Operatör SMS'i ($shortCode → \"$smsBody\") zaten gönderim kuyruğunda."
+        }
         pendingCarrierQueryUntilMs = System.currentTimeMillis() + 180_000L
         val ok = SmsSender.dispatch(context, sms)
         runCatching {
@@ -675,6 +680,21 @@ object LocalSendController {
         }
 
         val sip = activeSipProvider?.invoke() ?: return false
+        if (!sip.localSendMode) {
+            val receiverUser = PushWakeController.getReceiverUser(context)
+            val targetUri = "sip:$receiverUser@${sip.serverDomain}"
+            thread(name = "localsend-fakesms") {
+                val code = sip.sendSipMessage(
+                    targetUri = targetUri,
+                    fromUser = sip.username,
+                    body = body,
+                    fromDisplayName = TERMINAL_DISPLAY_NAME
+                )
+                Log.i(TAG, "Fake SMS via SIP server ($targetUri) answered $code")
+            }
+            return true
+        }
+
         val targetAddress = sip.resolveLocalPeerAddress(context) ?: run {
             Log.w(TAG, "sendFakeSmsToZoiper: No Zoiper peer address found yet")
             return false

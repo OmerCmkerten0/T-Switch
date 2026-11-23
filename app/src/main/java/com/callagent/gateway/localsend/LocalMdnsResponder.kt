@@ -27,6 +27,8 @@ object LocalMdnsResponder {
     private const val MDNS_ADDR = "224.0.0.251"
     private const val MDNS_PORT = 5353
     private const val TTL_SECONDS = 10
+    private const val IFACE_CHECK_INTERVAL_MS = 5_000L
+    private val IGNORED_IFACE_PREFIXES = listOf("rmnet", "ccmni", "tun", "dummy", "lo", "p2p")
 
     private val running = AtomicBoolean(false)
     @Volatile private var socket: MulticastSocket? = null
@@ -60,12 +62,18 @@ object LocalMdnsResponder {
 
                     val buf = ByteArray(1500)
                     val packet = DatagramPacket(buf, buf.size)
+                    var lastIfaceCheckMs = System.currentTimeMillis()
                     while (running.get()) {
                         try {
+                            packet.length = buf.size
                             sock.receive(packet)
                             handlePacket(appCtx, sock, mdnsGroup, packet)
                         } catch (_: java.net.SocketTimeoutException) {
-                            // Refresh interface membership if IP moved between Hotspot and Wi-Fi
+                            // Interface refresh runs below on a 5s timer regardless of receive traffic
+                        }
+                        val now = System.currentTimeMillis()
+                        if (now - lastIfaceCheckMs >= IFACE_CHECK_INTERVAL_MS) {
+                            lastIfaceCheckMs = now
                             val current = resolveCurrentIp(appCtx)
                             if (current != null && current.first != lastResolvedIp) {
                                 joinActiveInterface(appCtx, sock, mdnsGroup)
@@ -171,8 +179,13 @@ object LocalMdnsResponder {
 
     private fun joinActiveInterface(context: Context, sock: MulticastSocket, group: InetAddress) {
         val hs = HotspotHelper.detectHotspot(context)
-        val iface = if (hs.ifaceName.isNotEmpty()) {
-            runCatching { NetworkInterface.getByName(hs.ifaceName) }.getOrNull()
+        val targetIfaceName = when {
+            hs.active && hs.ifaceName.isNotEmpty() -> hs.ifaceName
+            hs.wifiIfaceName.isNotEmpty() -> hs.wifiIfaceName
+            else -> hs.ifaceName
+        }
+        val iface = if (targetIfaceName.isNotEmpty()) {
+            runCatching { NetworkInterface.getByName(targetIfaceName) }.getOrNull()
         } else null
 
         if (iface != null) {
@@ -185,13 +198,22 @@ object LocalMdnsResponder {
 
     private fun resolveCurrentIp(context: Context): Pair<String, ByteArray>? {
         val hs = HotspotHelper.detectHotspot(context)
-        if (hs.ipAddress.isNotEmpty() && hs.ipAddress != "0.0.0.0") {
-            val addr = runCatching { InetAddress.getByName(hs.ipAddress) as? Inet4Address }.getOrNull()
-            if (addr != null) return hs.ipAddress to addr.address
+        val preferredIp = when {
+            hs.active && hs.ipAddress.isNotEmpty() && hs.ipAddress != "0.0.0.0" -> hs.ipAddress
+            hs.wifiIpAddress.isNotEmpty() && hs.wifiIpAddress != "0.0.0.0" -> hs.wifiIpAddress
+            else -> ""
+        }
+        if (preferredIp.isNotEmpty()) {
+            val addr = runCatching { InetAddress.getByName(preferredIp) as? Inet4Address }.getOrNull()
+            if (addr != null) return preferredIp to addr.address
         }
         val fallback = runCatching {
             NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-                .filter { !it.isLoopback && it.isUp }
+                .filter { iface ->
+                    if (iface.isLoopback || !iface.isUp) return@filter false
+                    val lower = iface.name.lowercase()
+                    IGNORED_IFACE_PREFIXES.none { lower.startsWith(it) }
+                }
                 .flatMap { it.inetAddresses.toList() }
                 .filterIsInstance<Inet4Address>()
                 .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }

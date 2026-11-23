@@ -20,13 +20,91 @@ import kotlin.concurrent.thread
 object HotspotHelper {
     private const val TAG = "HotspotHelper"
 
+    private val IGNORED_IFACE_PREFIXES = listOf("rmnet", "ccmni", "tun", "dummy", "lo", "p2p")
+    private val TETHER_GATEWAY_IPS = setOf("192.168.43.1", "192.168.42.129", "192.168.137.1")
+
     data class HotspotInfo(
         val active: Boolean,
         val ifaceName: String,
         val ipAddress: String,
-        val connectedClients: List<String>
+        val connectedClients: List<String>,
+        val wifiIfaceName: String = "",
+        val wifiIpAddress: String = ""
     ) {
         val isActive: Boolean get() = active
+    }
+
+    /**
+     * Pure classification of `(interfaceName, ipv4)` network candidates into either
+     * an active Hotspot/Tether AP or a passive client Wi-Fi connection.
+     *
+     * Cellular (`rmnet*`, `ccmni*`), VPN (`tun*`), `dummy*`, `lo*`, and `p2p*`
+     * interfaces are always ignored.
+     */
+    fun classifyNetworkCandidates(
+        candidates: List<Pair<String, String>>,
+        wifiApEnabled: Boolean
+    ): HotspotInfo {
+        var bestApIface = ""
+        var bestApIp = ""
+        var bestApScore = -1
+
+        var wifiIface = ""
+        var wifiIp = ""
+
+        for ((rawName, rawIp) in candidates) {
+            val ifaceName = rawName.trim()
+            val name = ifaceName.lowercase()
+            val ip = rawIp.trim()
+
+            if (ifaceName.isEmpty() || ip.isEmpty() || ip == "0.0.0.0" ||
+                ip.startsWith("127.") || ip.startsWith("169.254.")
+            ) {
+                continue
+            }
+            if (IGNORED_IFACE_PREFIXES.any { name.startsWith(it) }) {
+                continue
+            }
+
+            val apScore = when {
+                name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan") -> 100
+                name.startsWith("wlan1") || name.startsWith("wlan2") -> 90
+                name.startsWith("rndis") || name.startsWith("usb") -> 80
+                name == "wlan0" && (wifiApEnabled || ip in TETHER_GATEWAY_IPS) -> 75
+                else -> -1
+            }
+
+            if (apScore > bestApScore) {
+                bestApScore = apScore
+                bestApIface = ifaceName
+                bestApIp = ip
+            } else if (apScore < 0 && name.startsWith("wlan")) {
+                if (wifiIp.isEmpty() || name == "wlan0") {
+                    wifiIface = ifaceName
+                    wifiIp = ip
+                }
+            }
+        }
+
+        return if (bestApScore >= 0) {
+            HotspotInfo(
+                active = true,
+                ifaceName = bestApIface,
+                ipAddress = bestApIp,
+                connectedClients = emptyList(),
+                wifiIfaceName = wifiIface,
+                wifiIpAddress = wifiIp
+            )
+        } else {
+            HotspotInfo(
+                active = false,
+                ifaceName = "",
+                ipAddress = "0.0.0.0",
+                connectedClients = emptyList(),
+                wifiIfaceName = wifiIface,
+                wifiIpAddress = wifiIp
+            )
+        }
     }
 
     @Volatile
@@ -98,69 +176,24 @@ object HotspotHelper {
     private fun detectHotspotInternal(context: Context?, allowRoot: Boolean): HotspotInfo {
         try {
             val allIfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-            // Priority 1: Dedicated AP / Tether interfaces (ap0, softap0, swlan0, wlan1, rndis0)
-            // Priority 2: wlan0 when it holds a typical Hotspot gateway IP (e.g. 192.168.43.1, 192.168.x.1)
-            // or when WifiApState is enabled.
             val apActiveInWifiManager = context?.let { isWifiApEnabled(it) } ?: false
 
-            var bestIface = ""
-            var bestIp = ""
-            var bestScore = -1
-
+            val candidates = mutableListOf<Pair<String, String>>()
             for (iface in allIfaces) {
                 if (iface.isLoopback || !iface.isUp) continue
-                val name = iface.name.lowercase()
-                // Skip cellular / VPN / dummy interfaces
-                if (name.startsWith("rmnet") || name.startsWith("ccmni") ||
-                    name.startsWith("tun") || name.startsWith("dummy") ||
-                    name.startsWith("lo") || name.startsWith("p2p")
-                ) {
-                    continue
-                }
-
                 val ipv4 = iface.inetAddresses.toList()
                     .filterIsInstance<Inet4Address>()
                     .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
                     ?.hostAddress ?: continue
-
-                val score = when {
-                    name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan") -> 100
-                    name.startsWith("wlan1") || name.startsWith("wlan2") -> 90
-                    name.startsWith("rndis") || name.startsWith("usb") -> 80
-                    name == "wlan0" && (apActiveInWifiManager || ipv4.startsWith("192.168.43.") || ipv4.endsWith(".1")) -> 75
-                    name.startsWith("wlan") -> 50
-                    else -> 10
-                }
-
-                if (score > bestScore) {
-                    bestScore = score
-                    bestIface = iface.name
-                    bestIp = ipv4
-                }
+                candidates.add(iface.name to ipv4)
             }
 
-            if (bestIp.isNotEmpty() && bestIp != "0.0.0.0") {
-                val isApCandidate = apActiveInWifiManager ||
-                    bestIface.startsWith("ap") ||
-                    bestIface.startsWith("softap") ||
-                    bestIface.startsWith("swlan") ||
-                    bestIface.startsWith("wlan1") ||
-                    bestIface.startsWith("rndis") ||
-                    bestIp.startsWith("192.168.43.") ||
-                    bestIp.endsWith(".1") ||
-                    bestScore >= 50
-                val clients = if (isApCandidate) {
-                    findConnectedClients(bestIface, bestIp, allowRoot = allowRoot)
-                } else {
-                    emptyList()
-                }
-                val isAp = isApCandidate || clients.isNotEmpty()
-                return HotspotInfo(
-                    active = isAp,
-                    ifaceName = bestIface,
-                    ipAddress = bestIp,
-                    connectedClients = clients
-                )
+            val info = classifyNetworkCandidates(candidates, apActiveInWifiManager)
+            return if (info.active) {
+                val clients = findConnectedClients(info.ifaceName, info.ipAddress, allowRoot = allowRoot)
+                info.copy(connectedClients = clients)
+            } else {
+                info
             }
         } catch (e: Exception) {
             Log.w(TAG, "detectHotspot failed: ${e.message}")
@@ -312,7 +345,7 @@ object HotspotHelper {
                     "iptables -I FORWARD 1 -i $hsIface -j ACCEPT 2>/dev/null; " +
                     "iptables -C FORWARD -o $hsIface -j ACCEPT 2>/dev/null || " +
                     "iptables -I FORWARD 1 -o $hsIface -j ACCEPT 2>/dev/null; " +
-                    "ip rule add from all lookup main pref 1 2>/dev/null || true",
+                    "(ip rule show | grep -q 'pref 1 ' || ip rule add from all lookup main pref 1 2>/dev/null || true)",
                 timeoutMs = 8000
             )
             // Wait briefly for cellular data to attach
@@ -327,7 +360,8 @@ object HotspotHelper {
         } else {
             RootShell.execForOutput(
                 "svc data disable 2>/dev/null; " +
-                    "settings put global mobile_data 0 2>/dev/null",
+                    "settings put global mobile_data 0 2>/dev/null; " +
+                    "ip rule del pref 1 2>/dev/null || true",
                 timeoutMs = 6000
             )
             "📴 [T-Switch İnternet Paylaşımı: KAPATILDI ❌]\n" +
