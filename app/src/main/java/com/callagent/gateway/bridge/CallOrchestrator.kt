@@ -339,6 +339,9 @@ class CallOrchestrator(
         listener?.onStateChanged(bridgeState, "iPhone aranıyor (Callback: $cleanDest)")
 
         PushWakeController.setCallBridgeCallbacks(null)
+        if (PushWakeController.isWakeActive()) {
+            PushWakeController.cancelWake("starting cloud callback")
+        }
         PushWakeController.triggerWakeAsync(
             context = context,
             callerNumber = "Callback: $cleanDest",
@@ -385,6 +388,12 @@ class CallOrchestrator(
                 activeRtpSession?.updateRemoteEndpoint(addr, port)
             }
         )
+        schedule(CALLBACK_RING_TIMEOUT_MS) {
+            if (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) {
+                Log.w(TAG, "Cloud callback ring timeout (${CALLBACK_RING_TIMEOUT_MS}ms) for $cleanDest")
+                tearDown("Callback timeout")
+            }
+        }
         return true
     }
 
@@ -700,7 +709,12 @@ class CallOrchestrator(
         ) {
             val gsmCall = activeGsmCall!!
             val (callerNumber, _) = GsmCallManager.callerOf(gsmCall)
-            if (!PushWakeController.isWakeActive() && pushConfigured) {
+            if (CallFailoverPolicy.shouldTriggerCustomSipWake(
+                    wakeAlreadyTriggered = customSipWakeTriggered,
+                    pushWakeActive = PushWakeController.isWakeActive(),
+                    pushConfigured = pushConfigured
+                )
+            ) {
                 customSipWakeTriggered = true
                 PushWakeController.triggerWakeAsync(
                     context = context,
@@ -1137,7 +1151,10 @@ class CallOrchestrator(
             onRejectedOrEnded = { code, reason ->
                 if (generation == callGen) {
                     Log.i(TAG, "PushKit SIP leg ended ($code): $reason (bridgeState=$bridgeState)")
-                    if (bridgeState == BridgeState.BRIDGED) {
+                    if (bridgeState == BridgeState.BRIDGED ||
+                        bridgeState == BridgeState.GSM_ANSWERED ||
+                        code == 200
+                    ) {
                         tearDown(reason)
                     } else if (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) {
                         if (!CallFailoverPolicy.shouldFallbackToLocalRingOnError(code)) {
@@ -1283,8 +1300,11 @@ class CallOrchestrator(
                         if (generation != callGen || activeSipCall !== sipCall) return@schedule
                         if (bridgeState == BridgeState.SIP_CALLING &&
                             sipCall.state == SipCall.State.TRYING &&
-                            !customSipWakeTriggered &&
-                            PushWakeController.isConfigured(context)
+                            CallFailoverPolicy.shouldTriggerCustomSipWake(
+                                wakeAlreadyTriggered = customSipWakeTriggered,
+                                pushWakeActive = PushWakeController.isWakeActive(),
+                                pushConfigured = PushWakeController.isConfigured(context)
+                            )
                         ) {
                             customSipWakeTriggered = true
                             Log.i(TAG, "Custom SIP still TRYING after ${CUSTOM_SIP_WAKE_DELAY_MS}ms — firing wake-only PushKit")
@@ -1729,6 +1749,7 @@ class CallOrchestrator(
         private const val CUSTOM_SIP_RETRY_DELAY_MS = 2_000L
         private const val CUSTOM_SIP_WAKE_WINDOW_MS = 20_000L
         private const val CUSTOM_SIP_RING_POLL_MS = 150L
+        private const val CALLBACK_RING_TIMEOUT_MS = 35_000L
         private const val SIP_CALL_TIMEOUT_MS = 30_000L
         /** Safety net once the server reports ringing (its own dial timeout normally ends it first). */
         private const val SIP_RING_MAX_MS = 70_000L

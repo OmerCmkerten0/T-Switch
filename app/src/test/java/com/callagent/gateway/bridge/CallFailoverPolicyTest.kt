@@ -9,6 +9,7 @@ class CallFailoverPolicyTest {
 
     @Test
     fun explicitRejection486Or603NeverFallsBackToLocalRing() {
+        assertFalse(CallFailoverPolicy.shouldFallbackToLocalRingOnError(200))
         assertFalse(CallFailoverPolicy.shouldFallbackToLocalRingOnError(486))
         assertFalse(CallFailoverPolicy.shouldFallbackToLocalRingOnError(603))
 
@@ -18,6 +19,39 @@ class CallFailoverPolicyTest {
                 CallFailoverPolicy.shouldFallbackToLocalRingOnError(code)
             )
         }
+    }
+
+    @Test
+    fun customSipWakeTriggersAtMostOncePerInboundCall() {
+        assertTrue(
+            CallFailoverPolicy.shouldTriggerCustomSipWake(
+                wakeAlreadyTriggered = false,
+                pushWakeActive = false,
+                pushConfigured = true
+            )
+        )
+        // Once triggered, must NOT re-fire PushKit on 2s custom SIP retries even after the wake finishes
+        assertFalse(
+            CallFailoverPolicy.shouldTriggerCustomSipWake(
+                wakeAlreadyTriggered = true,
+                pushWakeActive = false,
+                pushConfigured = true
+            )
+        )
+        assertFalse(
+            CallFailoverPolicy.shouldTriggerCustomSipWake(
+                wakeAlreadyTriggered = false,
+                pushWakeActive = true,
+                pushConfigured = true
+            )
+        )
+        assertFalse(
+            CallFailoverPolicy.shouldTriggerCustomSipWake(
+                wakeAlreadyTriggered = false,
+                pushWakeActive = false,
+                pushConfigured = false
+            )
+        )
     }
 
     @Test

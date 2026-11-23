@@ -1,11 +1,20 @@
 package com.callagent.gateway.localsend
 
 import com.callagent.gateway.sip.SipMessage
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicBoolean
 
 class PushWakeControllerTest {
+
+    @After
+    fun resetWakeState() {
+        PushWakeController.resetStateForTest()
+    }
 
     @Test
     fun extractReversedRoutesHandlesMultiLineAndCommaSeparated() {
@@ -63,5 +72,47 @@ class PushWakeControllerTest {
             "p2p0" to "192.168.49.1"
         )
         assertEquals("127.0.0.1", PushWakeController.selectPreferredIpv4(onlySkipped))
+    }
+
+    @Test
+    fun supersedingWindingDownWakeForceAbortsOldSessionAndAcquiresSlot() {
+        PushWakeController.setWakeStateForTest(active = true, cancelled = true)
+        val forceAborted = AtomicBoolean(false)
+        val busyCalled = AtomicBoolean(false)
+
+        val acquired = PushWakeController.acquireWakeSlot(
+            keepExistingIfActive = true,
+            onForceAbort = {
+                forceAborted.set(true)
+                // Simulates the old pushkit-wake thread exiting finally after transport.close()
+                PushWakeController.setWakeStateForTest(active = false, cancelled = true)
+            },
+            waitTimeoutMs = 200L,
+            pollIntervalMs = 10L,
+            onBusy = { busyCalled.set(true) }
+        )
+
+        assertTrue("Expected forceAbort to close winding-down session I/O", forceAborted.get())
+        assertTrue("Expected new wake to acquire slot after old session aborts", acquired)
+        assertFalse("onBusy must not fire when slot is acquired", busyCalled.get())
+    }
+
+    @Test
+    fun stuckActiveWakeInvokesBusyCallbackInsteadOfSilentDrop() {
+        PushWakeController.setWakeStateForTest(active = true, cancelled = true)
+        val forceAborted = AtomicBoolean(false)
+        val busyCalled = AtomicBoolean(false)
+
+        val acquired = PushWakeController.acquireWakeSlot(
+            keepExistingIfActive = true,
+            onForceAbort = { forceAborted.set(true) },
+            waitTimeoutMs = 60L,
+            pollIntervalMs = 10L,
+            onBusy = { busyCalled.set(true) }
+        )
+
+        assertTrue("Expected forceAbort to be attempted on supersede", forceAborted.get())
+        assertFalse("Slot cannot be acquired while old session stays stuck", acquired)
+        assertTrue("onBusy MUST fire so caller receives async 503 instead of wedging", busyCalled.get())
     }
 }

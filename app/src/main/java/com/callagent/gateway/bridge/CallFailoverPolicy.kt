@@ -13,7 +13,7 @@ import com.callagent.gateway.localsend.RoutingMode
  *   is fresh; otherwise it launches cloud PushKit directly to avoid wasted delay and double-ringing.
  */
 object CallFailoverPolicy {
-    private val EXPLICIT_REJECTION_CODES = setOf(486, 603)
+    private val NO_LOCAL_FALLBACK_CODES = setOf(200, 486, 603)
     private val CUSTOM_SIP_WAKE_RETRY_CODES = setOf(0, 404, 408, 480, 500, 503, 504)
 
     fun shouldRetryCustomSipAfterError(
@@ -29,8 +29,14 @@ object CallFailoverPolicy {
         return statusCode in CUSTOM_SIP_WAKE_RETRY_CODES
     }
 
+    fun shouldTriggerCustomSipWake(
+        wakeAlreadyTriggered: Boolean,
+        pushWakeActive: Boolean,
+        pushConfigured: Boolean
+    ): Boolean = !wakeAlreadyTriggered && !pushWakeActive && pushConfigured
+
     fun shouldFallbackToLocalRingOnError(statusCode: Int): Boolean =
-        statusCode !in EXPLICIT_REJECTION_CODES
+        statusCode !in NO_LOCAL_FALLBACK_CODES
 
     fun shouldStartWithLocalPeer(mode: RoutingMode, localPeerFresh: Boolean): Boolean =
         mode == RoutingMode.HYBRID_LOCAL_IP && localPeerFresh

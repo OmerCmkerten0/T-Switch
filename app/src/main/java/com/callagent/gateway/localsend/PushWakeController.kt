@@ -103,6 +103,68 @@ object PushWakeController {
 
     fun isWakeActive(): Boolean = wakeActive.get() && !wakeCancelled.get()
 
+    internal fun setWakeStateForTest(active: Boolean, cancelled: Boolean) {
+        wakeActive.set(active)
+        wakeCancelled.set(cancelled)
+    }
+
+    internal fun resetStateForTest() {
+        wakeActive.set(false)
+        wakeCancelled.set(false)
+        isCallActiveOrRinging = false
+        synchronized(dialogLock) { activeDialog = null }
+        activeTransport = null
+        activeStunSocket = null
+        bridgeCallbacks = null
+    }
+
+    internal fun forceAbortActiveIo() {
+        val stunSock = activeStunSocket
+        val transport = synchronized(dialogLock) { activeDialog?.transport } ?: activeTransport
+        if (stunSock != null || transport != null) {
+            thread(name = "pushkit-force-abort", isDaemon = true) {
+                runCatching { stunSock?.close() }
+                runCatching { transport?.close() }
+            }
+        }
+    }
+
+    /**
+     * Acquire the single active PushKit wake slot for a new session.
+     *
+     * If a previous session is winding down (`wakeCancelled == true`), immediately force-closes
+     * its active STUN/TLS I/O so the old thread exits `finally` without stalling up to 1.5s.
+     * If the slot still cannot be acquired within [waitTimeoutMs], invokes [onBusy] so callers
+     * can tear down cleanly instead of wedging in `SIP_CALLING`.
+     */
+    internal fun acquireWakeSlot(
+        keepExistingIfActive: Boolean,
+        onForceAbort: () -> Unit = ::forceAbortActiveIo,
+        waitTimeoutMs: Long = 350L,
+        pollIntervalMs: Long = 25L,
+        onBusy: (() -> Unit)? = null
+    ): Boolean {
+        if (wakeActive.compareAndSet(false, true)) return true
+        if (keepExistingIfActive && !wakeCancelled.get()) {
+            return false
+        }
+        cancelWake("superseded by new wake")
+        onForceAbort()
+        val deadline = System.currentTimeMillis() + waitTimeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (wakeActive.compareAndSet(false, true)) return true
+            try {
+                Thread.sleep(pollIntervalMs)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        if (wakeActive.compareAndSet(false, true)) return true
+        onBusy?.invoke()
+        return false
+    }
+
     /**
      * Extract dialog Route set from a 200 OK response in reversed RFC 3261 order,
      * properly handling both multi-line and comma-separated Record-Route headers.
@@ -434,18 +496,23 @@ object PushWakeController {
         val effOnReInviteRtp = if (effWakeOnly) null else (onReInviteRtp ?: cb?.onReInviteRtp)
         val effHoldMs = if (!effWakeOnly && effRtpPort > 0 && holdMs <= 12_000L) 22_000L else holdMs
 
-        if (!wakeActive.compareAndSet(false, true)) {
+        val acquired = acquireWakeSlot(
+            keepExistingIfActive = (onStatus == null),
+            onBusy = {
+                Log.w(TAG, "PushKit wake still in progress after supersede abort — reporting busy")
+                onStatus?.invoke("⏳ PushKit uyandırma zaten çalışıyor…")
+                if (effOnRejectedOrEnded != null) {
+                    thread(name = "pushkit-busy-notify", isDaemon = true) {
+                        effOnRejectedOrEnded.invoke(503, "PushKit oturumu meşgul (önceki çağrı kapanıyor)")
+                    }
+                }
+            }
+        )
+        if (!acquired) {
             if (onStatus == null && !wakeCancelled.get()) {
                 Log.d(TAG, "PushKit wake/call leg already active — keeping existing session")
-                return
             }
-            cancelWake("superseded by new wake")
-            Thread.sleep(250)
-            if (!wakeActive.compareAndSet(false, true)) {
-                Log.d(TAG, "PushKit wake already in progress")
-                onStatus?.invoke("⏳ PushKit uyandırma zaten çalışıyor…")
-                return
-            }
+            return
         }
         wakeCancelled.set(false)
         isCallActiveOrRinging = false
