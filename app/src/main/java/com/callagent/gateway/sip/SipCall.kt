@@ -35,6 +35,7 @@ class SipCall(
     var remoteTag: String? = null
     var fromHeader: String? = null
     var toHeader: String? = null
+    var routeSet: List<String> = emptyList()
 
     // Remote endpoint
     var remoteContactUri: String? = null
@@ -132,6 +133,7 @@ class SipCall(
                 toHeader = msg.to
                 msg.contactUri?.let { remoteContactUri = it }
                 msg.contactAddress?.let { remoteContactAddress = it }
+                routeSet = msg.recordRouteHeaders.reversed()
                 msg.sdpRtpPort?.let { remoteRtpPort = it }
                 msg.sdpAddress?.let { remoteRtpAddress = it }
                 negotiatedPayloadType = msg.sdpPreferredPayloadType
@@ -193,6 +195,25 @@ class SipCall(
 
             // 401/407 Auth required for INVITE
             msg.isResponse && (msg.statusCode == 401 || msg.statusCode == 407) -> {
+                // RFC 3261 §17.1.1.3: non-2xx final responses to INVITE (including
+                // 401/407 challenges) MUST be ACKed before resending with auth.
+                if (msg.cseq?.contains("INVITE") == true) {
+                    val ackCseq = msg.cseq?.split(" ")?.firstOrNull()?.toIntOrNull() ?: localCseq
+                    val uri = originalInvite?.requestUri
+                        ?: remoteContactUri
+                        ?: "sip:${sipClient.serverDomain}:${sipClient.serverPort}"
+                    val ackVia = if (!authHandled) {
+                        originalInvite?.via ?: msg.via
+                    } else {
+                        msg.via ?: originalInvite?.via
+                    }
+                    val ack = SipBuilder.ack(
+                        uri, ackVia, msg.to, fromHeader ?: msg.from,
+                        callId, ackCseq,
+                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort
+                    )
+                    sipClient.sendResponse(ack, peerAddress)
+                }
                 if (authHandled) {
                     // UDP retransmission of the original 401 — ignore it.
                     // We already sent an authenticated re-INVITE; sending another
@@ -214,7 +235,7 @@ class SipCall(
                 Log.i(TAG, "Received BYE for call $callId")
                 // Send 200 OK to BYE
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
                     peerAddress
                 )
                 state = State.TERMINATED
@@ -230,7 +251,7 @@ class SipCall(
             msg.isRequest && msg.method == "CANCEL" -> {
                 Log.i(TAG, "Received CANCEL for call $callId")
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
                     peerAddress
                 )
                 if (state != State.ANSWERED && state != State.TERMINATED) {
@@ -259,7 +280,7 @@ class SipCall(
                     val ack = SipBuilder.ack(
                         uri, originalInvite?.via, msg.to, fromHeader,
                         callId, ackCseq,
-                        sipClient.username, sipClient.publicIp, sipClient.localPort
+                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort
                     )
                     sipClient.sendResponse(ack, peerAddress)
                 }
@@ -289,7 +310,7 @@ class SipCall(
             // DTMF as SIP INFO (application/dtmf-relay or application/dtmf).
             msg.isRequest && msg.method == "INFO" -> {
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
                     peerAddress
                 )
                 val digit = com.callagent.gateway.rtp.SipInfoDtmf.parse(msg.contentType, msg.body)
@@ -331,7 +352,7 @@ class SipCall(
             // In-dialog OPTIONS (some servers probe established calls).
             msg.isRequest && msg.method == "OPTIONS" -> {
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.localPort),
+                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
                     peerAddress
                 )
                 return true
@@ -373,7 +394,7 @@ class SipCall(
             msg.sdpTelephoneEventPt?.let { telephoneEventPt = it }
         }
         val ok = SipBuilder.ok200(
-            msg, sipClient.username, sipClient.publicIp, sipClient.localPort,
+            msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
             // A re-INVITE without SDP is a delayed offer: the 200 OK must
             // carry one.  An UPDATE without SDP is answered without.
             localRtpPort = if ((hasSdp || msg.method == "INVITE") && localRtpPort > 0) localRtpPort else null,
@@ -403,7 +424,7 @@ class SipCall(
         }
 
         val ok = SipBuilder.ok200(
-            invite, sipClient.username, sipClient.publicIp, sipClient.localPort,
+            invite, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
             localRtpPort = localRtpPort, toTag = toTag,
             srtp = localSrtpKeys, srtpTag = srtpTag,
             answeredPayloadType = negotiatedPayloadType,
@@ -437,7 +458,8 @@ class SipCall(
         val ack = SipBuilder.ack(
             uri, null, toHeader, fromHeader,
             callId, cseq,
-            sipClient.username, sipClient.publicIp, sipClient.localPort
+            sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+            routeHeaders = routeSet
         )
         sipClient.sendResponse(ack, peerAddress)
         Log.d(TAG, "Sent ACK for call $callId (CSeq: $cseq)")
@@ -467,7 +489,7 @@ class SipCall(
                     inviteCseq,
                     sipClient.username,
                     sipClient.publicIp,
-                    sipClient.localPort
+                    sipClient.advertisedPort
                 )
                 sipClient.sendResponse(cancel, peerAddress)
                 state = State.TERMINATED
@@ -494,7 +516,8 @@ class SipCall(
         val bye = SipBuilder.bye(
             uri, byeFrom, byeTo,
             callId, localCseq++,
-            sipClient.username, sipClient.publicIp, sipClient.localPort
+            sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+            routeHeaders = routeSet
         )
         sipClient.sendResponse(bye, peerAddress)
         state = State.TERMINATED

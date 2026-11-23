@@ -435,7 +435,7 @@ object SipBuilder {
         auth: String? = null,
         srtp: SrtpKeys? = null
     ): String {
-        val fromDisplay = if (callerIdName != null) "\"$callerIdName\" " else ""
+        val fromDisplay = if (!callerIdName.isNullOrBlank()) "\"$callerIdName\" " else ""
         val fromUser = callerIdNumber ?: username
         val sdp = buildSdp(localIp, localRtpPort, srtp)
         return buildString {
@@ -654,12 +654,16 @@ object SipBuilder {
         targetUri: String,
         via: String?, toHeader: String?, fromHeader: String?,
         callId: String?, cseq: Int,
-        username: String, localIp: String, localPort: Int
+        username: String, localIp: String, localPort: Int,
+        routeHeaders: List<String> = emptyList()
     ): String = buildString {
         append("ACK $targetUri SIP/2.0\r\n")
         append("Via: ${via ?: "SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport"}\r\n")
         append("Max-Forwards: 70\r\n")
-            append("User-Agent: $userAgent\r\n")
+        append("User-Agent: $userAgent\r\n")
+        for (r in routeHeaders) {
+            if (r.isNotBlank()) append("Route: $r\r\n")
+        }
         append("To: $toHeader\r\n")
         append("From: $fromHeader\r\n")
         append("Call-ID: $callId\r\n")
@@ -672,12 +676,16 @@ object SipBuilder {
         targetUri: String,
         fromHeader: String?, toHeader: String?,
         callId: String?, cseq: Int,
-        username: String, localIp: String, localPort: Int
+        username: String, localIp: String, localPort: Int,
+        routeHeaders: List<String> = emptyList()
     ): String = buildString {
         append("BYE $targetUri SIP/2.0\r\n")
         append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
-            append("User-Agent: $userAgent\r\n")
+        append("User-Agent: $userAgent\r\n")
+        for (r in routeHeaders) {
+            if (r.isNotBlank()) append("Route: $r\r\n")
+        }
         append("From: $fromHeader\r\n")
         append("To: $toHeader\r\n")
         append("Call-ID: $callId\r\n")

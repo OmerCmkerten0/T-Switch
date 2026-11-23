@@ -56,7 +56,18 @@ class SipClient(
     /** Last softphone (Zoiper) endpoint that registered or sent traffic in [localSendMode]. */
     @Volatile var registeredPeer: Pair<String, Int>? = null; private set
     @Volatile var registeredPeerUser: String = "zoiper"; private set
+    @Volatile var lastPeerSeenMs: Long = 0L; private set
     @Volatile var onLocalPeerRegistered: ((String, Pair<String, Int>) -> Unit)? = null
+
+    fun isLocalPeerFresh(nowMs: Long = System.currentTimeMillis(), ttlMs: Long = 65_000L): Boolean =
+        registeredPeer != null && isPeerFresh(lastPeerSeenMs, nowMs, ttlMs)
+
+    /** Call-IDs whose local LAN resend/Timer-A retransmit is suppressed (e.g. after cloud failover). */
+    private val suppressedLocalCallIds = ConcurrentHashMap.newKeySet<String>()
+
+    fun suppressLocalResendForCall(callId: String) {
+        suppressedLocalCallIds.add(callId)
+    }
 
     val serverAddress: Pair<String, Int>
         get() = if (localSendMode) {
@@ -90,7 +101,7 @@ class SipClient(
      * Port to put in Via and Contact.  UDP binds the configured port; TLS is
      * given an ephemeral one by the OS and has to advertise that instead.
      */
-    private val advertisedPort: Int get() = transport?.localPort ?: localPort
+    val advertisedPort: Int get() = transport?.localPort ?: localPort
     /** Pre-resolved server address — avoids DNS on main thread */
     @Volatile private var resolvedServerAddr: InetAddress? = null
     private val cseq = AtomicInteger(1)
@@ -105,6 +116,10 @@ class SipClient(
     /** Guards against two threads registering at once: start() launches a
      *  SIP-Register thread while SIP-Monitor retries on its own schedule. */
     private val registering = AtomicBoolean(false)
+
+    /** Caps 401/407 auth retries to 1 per [register] attempt so bad credentials
+     *  do not loop until timeout and trigger server bans. */
+    private val registerAuthAttempted = AtomicBoolean(false)
 
     /** Consecutive real (not backed-off) registration failures. */
     @Volatile private var registerFailures = 0
@@ -199,6 +214,7 @@ class SipClient(
         registrationLatch?.countDown()
         activeCalls.values.forEach { it.hangup() }
         activeCalls.clear()
+        suppressedLocalCallIds.clear()
         sendExecutor?.shutdownNow()
         sendExecutor = null
         transport?.close()
@@ -343,9 +359,10 @@ class SipClient(
             }
             registeredPeer = address
             registeredPeerUser = userFromPacket
+            lastPeerSeenMs = System.currentTimeMillis()
             if (msg.method == "REGISTER") {
                 registered = true
-                lastRegisterTime = System.currentTimeMillis()
+                lastRegisterTime = lastPeerSeenMs
                 lastServerResponseTime = lastRegisterTime
                 val ok = SipBuilder.registerOk200(msg, userFromPacket, address.first, address.second)
                 sendTo(ok, address)
@@ -504,6 +521,7 @@ class SipClient(
                 return false
             }
             uiLog("REGISTER → $serverDomain")
+            registerAuthAttempted.set(false)
             registrationLatch = CountDownLatch(1)
             sendRegister()
             // Wait for receiveLoop → handleRegisterResponse to signal
@@ -566,6 +584,11 @@ class SipClient(
                 true
             }
             401, 407 -> {
+                if (!registerAuthAttempted.compareAndSet(false, true)) {
+                    uiLog("REGISTER ${msg.statusCode} rejected after auth — aborting retry")
+                    registrationLatch?.countDown()
+                    return false
+                }
                 uiLog("REGISTER ${msg.statusCode} challenge, sending auth")
                 val authParams = SipAuth.parseChallenge(msg)
                 if (authParams != null) {
@@ -606,9 +629,7 @@ class SipClient(
         call.fromHeader = msg.from
         call.toHeader = msg.to
         call.remoteTag = msg.fromTag
-
-        // Send 180 Ringing so the SIP UAC enters proceeding/early state while GSM dials
-        sendTo(SipBuilder.ringing180(msg, call.localTag), address)
+        call.routeSet = msg.recordRouteHeaders
 
         // Parse SDP
         msg.sdpRtpPort?.let { call.remoteRtpPort = it }
@@ -659,14 +680,22 @@ class SipClient(
         } else {
             "sip:$targetExtension@$serverDomain"
         }
+        val (fromUser, fromDisplayName) = buildInviteFromParts(
+            serverDomain = serverDomain,
+            username = username,
+            localSendMode = localSendMode,
+            callerIdNumber = call.outboundCallerIdNumber,
+            callerIdName = call.outboundCallerIdName
+        )
+        val fromDomain = if (localSendMode) publicIp else serverDomain
         return SipBuilder.invite(
-            targetUri, username, if (localSendMode) publicIp else serverDomain,
+            targetUri, username, fromDomain,
             publicIp, advertisedPort,
             call.callId, cseqNum,
             call.localRtpPort,
             fromTag = call.localTag,
-            callerIdNumber = call.outboundCallerIdNumber,
-            callerIdName = call.outboundCallerIdName,
+            callerIdNumber = fromUser,
+            callerIdName = fromDisplayName,
             srtp = call.localSrtpKeys
         )
     }
@@ -682,6 +711,7 @@ class SipClient(
         for (call in activeCalls.values) {
             if (call.direction == SipCall.Direction.OUTBOUND &&
                 !call.responseReceived &&
+                call.callId !in suppressedLocalCallIds &&
                 call.state != SipCall.State.ANSWERED &&
                 call.state != SipCall.State.TERMINATED) {
                 call.peerSourceAddress = newPeerAddr
@@ -711,9 +741,16 @@ class SipClient(
         call.localRtpPort = localRtpPort
         call.outboundCallerIdNumber = callerIdNumber
         call.outboundCallerIdName = callerIdName
-        val fromUser = callerIdNumber ?: username
-        val fromDisplay = if (callerIdName != null) "\"$callerIdName\" " else ""
-        call.fromHeader = "$fromDisplay<sip:$fromUser@$publicIp>;tag=${call.localTag}"
+        val (fromUser, fromDisplayName) = buildInviteFromParts(
+            serverDomain = serverDomain,
+            username = username,
+            localSendMode = localSendMode,
+            callerIdNumber = callerIdNumber,
+            callerIdName = callerIdName
+        )
+        val fromDomain = if (localSendMode) publicIp else serverDomain
+        val fromDisplay = if (!fromDisplayName.isNullOrBlank()) "\"$fromDisplayName\" " else ""
+        call.fromHeader = "$fromDisplay<sip:$fromUser@$fromDomain>;tag=${call.localTag}"
         call.toHeader = "<sip:$effectiveTarget@$effectiveDomain>"
 
         // Generated once, here, and reused for every retry and re-INVITE of
@@ -736,10 +773,10 @@ class SipClient(
         activeCalls[callId] = call
         if (!localSendMode) {
             sendTo(invite, peerAddr)
-            Log.i(TAG, "Sent INVITE RURI=$targetUri From=<sip:$fromUser@$serverDomain> (call-id=$callId)")
+            Log.i(TAG, "Sent INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)")
         } else if (initialPeer != null && initialPeer.first != localIp) {
             sendTo(invite, initialPeer)
-            Log.i(TAG, "Sent local INVITE RURI=$targetUri From=<sip:$fromUser@$publicIp> (call-id=$callId)")
+            Log.i(TAG, "Sent local INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)")
         } else {
             Log.i(TAG, "Local Send: no active LAN peer at call start — firing PushKit immediately (call-id=$callId)")
         }
@@ -747,60 +784,64 @@ class SipClient(
         // RFC 3261 Timer A: retransmit INVITE over UDP until any response is received.
         // Intervals: 500ms, 1s, 2s, 4s (capped at T2=4s, or 2s in Local Send).
         // Stops immediately when any SIP response arrives (including 401 auth challenge).
-        Thread({
-            var delay = 500L
-            val maxDelay = if (localSendMode) 2000L else 4000L
-            val maxRetransmits = if (localSendMode) 16 else 7
-            var elapsed = 0L
-            var unanswered = false
-            var wakeFired = false
-            var lastDest = peerAddr
+        // RFC 3261 §17.1.1.2 forbids Timer A retransmissions over reliable transports (TCP/TLS).
+        if (!(useTls && !localSendMode)) {
+            Thread({
+                var delay = 500L
+                val maxDelay = if (localSendMode) 2000L else 4000L
+                val maxRetransmits = if (localSendMode) 16 else 7
+                var elapsed = 0L
+                var unanswered = false
+                var wakeFired = false
+                var lastDest = peerAddr
 
-            if (localSendMode && initialPeer == null) {
-                wakeFired = true
-                if (com.callagent.gateway.localsend.LocalSendController.triggerPushWakeIfNeeded(callerIdNumber ?: targetExtension)) {
-                    uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma hemen gönderiliyor")
-                }
-            }
-
-            for (i in 1..maxRetransmits) {
-                Thread.sleep(delay)
-                elapsed += delay
-                if (call.responseReceived) {
-                    if (call.state == SipCall.State.RINGING || call.state == SipCall.State.ANSWERED) {
-                        com.callagent.gateway.localsend.PushWakeController.cancelWake("local INVITE yanıt aldı")
-                    }
-                    break
-                }
-                if (!activeCalls.containsKey(callId)) break
-                if (localSendMode && !wakeFired && elapsed >= 500L) {
+                if (localSendMode && initialPeer == null && callId !in suppressedLocalCallIds) {
                     wakeFired = true
                     if (com.callagent.gateway.localsend.LocalSendController.triggerPushWakeIfNeeded(callerIdNumber ?: targetExtension)) {
-                        uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma gönderiliyor")
+                        uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma hemen gönderiliyor")
                     }
                 }
-                val currentDest = if (localSendMode) resolveLocalPeerAddress() else peerAddr
-                if (currentDest != null && (!localSendMode || currentDest.first != localIp)) {
-                    if (localSendMode && currentDest != lastDest) {
-                        lastDest = currentDest
-                        call.peerSourceAddress = currentDest
-                        invite = buildOutboundInviteForPeer(call, targetExtension, currentDest, cseqNum)
-                        call.originalInvite = SipMessage.parse(invite)
+
+                for (i in 1..maxRetransmits) {
+                    Thread.sleep(delay)
+                    elapsed += delay
+                    if (call.responseReceived) {
+                        if (call.state == SipCall.State.RINGING || call.state == SipCall.State.ANSWERED) {
+                            com.callagent.gateway.localsend.PushWakeController.cancelWake("local INVITE yanıt aldı")
+                        }
+                        break
                     }
-                    Log.i(TAG, "INVITE retransmit #$i for $callId to ${currentDest.first}:${currentDest.second} (${delay}ms)")
-                    if (i == 1) uiLog("No response to INVITE — retransmitting")
-                    sendTo(invite, currentDest)
-                    if (localSendMode && currentDest.second != 5060) {
-                        sendTo(invite, Pair(currentDest.first, 5060))
+                    if (!activeCalls.containsKey(callId)) break
+                    if (callId in suppressedLocalCallIds) break
+                    if (localSendMode && !wakeFired && elapsed >= 500L) {
+                        wakeFired = true
+                        if (com.callagent.gateway.localsend.LocalSendController.triggerPushWakeIfNeeded(callerIdNumber ?: targetExtension)) {
+                            uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma gönderiliyor")
+                        }
                     }
-                    unanswered = true
+                    val currentDest = if (localSendMode) resolveLocalPeerAddress() else peerAddr
+                    if (currentDest != null && (!localSendMode || currentDest.first != localIp)) {
+                        if (localSendMode && currentDest != lastDest) {
+                            lastDest = currentDest
+                            call.peerSourceAddress = currentDest
+                            invite = buildOutboundInviteForPeer(call, targetExtension, currentDest, cseqNum)
+                            call.originalInvite = SipMessage.parse(invite)
+                        }
+                        Log.i(TAG, "INVITE retransmit #$i for $callId to ${currentDest.first}:${currentDest.second} (${delay}ms)")
+                        if (i == 1) uiLog("No response to INVITE — retransmitting")
+                        sendTo(invite, currentDest)
+                        if (localSendMode && currentDest.second != 5060) {
+                            sendTo(invite, Pair(currentDest.first, 5060))
+                        }
+                        unanswered = true
+                    }
+                    delay = minOf(delay * 2, maxDelay)
                 }
-                delay = minOf(delay * 2, maxDelay)
-            }
-            if (unanswered && !call.responseReceived && activeCalls.containsKey(callId)) {
-                uiLog("Server never answered the INVITE (${elapsed / 1000}s, $maxRetransmits sends)")
-            }
-        }, "INVITE-Retransmit").start()
+                if (unanswered && !call.responseReceived && activeCalls.containsKey(callId) && callId !in suppressedLocalCallIds) {
+                    uiLog("Server never answered the INVITE (${elapsed / 1000}s, $maxRetransmits sends)")
+                }
+            }, "INVITE-Retransmit").start()
+        }
 
         return call
     }
@@ -924,15 +965,26 @@ class SipClient(
         val uriEnd = toHeader.indexOf('>', uriStart).let { if (it < 0) toHeader.length else it }
         val targetUri = if (uriStart >= 0) toHeader.substring(uriStart, uriEnd) else return
 
+        val (fromUser, fromDisplayName) = buildInviteFromParts(
+            serverDomain = serverDomain,
+            username = username,
+            localSendMode = localSendMode,
+            callerIdNumber = call.outboundCallerIdNumber,
+            callerIdName = call.outboundCallerIdName
+        )
+        val fromDomain = if (localSendMode) publicIp else serverDomain
+        val fromDisplay = if (!fromDisplayName.isNullOrBlank()) "\"$fromDisplayName\" " else ""
+        call.fromHeader = "$fromDisplay<sip:$fromUser@$fromDomain>;tag=${call.localTag}"
+
         val auth = SipAuth.buildInviteAuthHeader(targetUri, username, password, authParams)
         val invite = SipBuilder.invite(
-            targetUri, username, serverDomain,
+            targetUri, username, fromDomain,
             publicIp, advertisedPort,
             call.callId, call.localCseq++,
             call.localRtpPort,
             fromTag = call.localTag,
-            callerIdNumber = call.outboundCallerIdNumber,
-            callerIdName = call.outboundCallerIdName,
+            callerIdNumber = fromUser,
+            callerIdName = fromDisplayName,
             auth = auth,
             srtp = call.localSrtpKeys
         )
@@ -1091,6 +1143,37 @@ class SipClient(
 
     companion object {
         private const val TAG = "SipClient"
+
+        /**
+         * Compute `(fromUser, fromDisplayName)` for outbound INVITEs.
+         *
+         * Flexisip (`sip.linphone.org`) rejects INVITEs whose `From` URI user does
+         * not match the authenticated SIP account username, so in cloud Linphone
+         * mode we put [username] in the `From` URI and surface caller ID in the
+         * display name.  Custom PBX/Asterisk trunks and Local Send keep caller ID
+         * in the `From` URI user.
+         */
+        fun buildInviteFromParts(
+            serverDomain: String,
+            username: String,
+            localSendMode: Boolean,
+            callerIdNumber: String?,
+            callerIdName: String?
+        ): Pair<String, String?> {
+            return if (!localSendMode && serverDomain.contains("linphone.org", ignoreCase = true)) {
+                val display = callerIdName?.takeIf { it.isNotBlank() } ?: callerIdNumber
+                Pair(username, display)
+            } else {
+                Pair(callerIdNumber ?: username, callerIdName)
+            }
+        }
+
+        /** True when a local peer was seen within [ttlMs] (default 65s). */
+        fun isPeerFresh(lastSeenMs: Long, nowMs: Long, ttlMs: Long = 65_000L): Boolean {
+            if (lastSeenMs <= 0L) return false
+            val age = nowMs - lastSeenMs
+            return age in 0L..ttlMs
+        }
 
         /** Seconds to wait for a REGISTER response before calling it failed. */
         private const val REGISTER_TIMEOUT_SEC = 10L

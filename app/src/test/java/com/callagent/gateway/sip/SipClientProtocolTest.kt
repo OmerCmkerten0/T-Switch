@@ -1,0 +1,172 @@
+package com.callagent.gateway.sip
+
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class SipClientProtocolTest {
+
+    @After
+    fun resetSipBuilderTransport() {
+        SipBuilder.transport = "UDP"
+    }
+
+    @Test
+    fun linphoneInvitePutsUsernameInFromUriAndCallerInDisplayName() {
+        val (fromUserNoName, fromDisplayNoName) = SipClient.buildInviteFromParts(
+            serverDomain = "sip.linphone.org",
+            username = "t-switch_pusher",
+            localSendMode = false,
+            callerIdNumber = "+905551234567",
+            callerIdName = null
+        )
+        assertEquals("t-switch_pusher", fromUserNoName)
+        assertEquals("+905551234567", fromDisplayNoName)
+
+        val (fromUserBlankName, fromDisplayBlankName) = SipClient.buildInviteFromParts(
+            serverDomain = "SIP.LINPHONE.ORG",
+            username = "t-switch_pusher",
+            localSendMode = false,
+            callerIdNumber = "+905551234567",
+            callerIdName = "   "
+        )
+        assertEquals("t-switch_pusher", fromUserBlankName)
+        assertEquals("+905551234567", fromDisplayBlankName)
+
+        val (fromUserWithName, fromDisplayWithName) = SipClient.buildInviteFromParts(
+            serverDomain = "sip.linphone.org",
+            username = "t-switch_pusher",
+            localSendMode = false,
+            callerIdNumber = "+905551234567",
+            callerIdName = "Alice"
+        )
+        assertEquals("t-switch_pusher", fromUserWithName)
+        assertEquals("Alice", fromDisplayWithName)
+
+        val invite = SipBuilder.invite(
+            targetUri = "sip:receiver@sip.linphone.org",
+            username = "t-switch_pusher",
+            domain = "sip.linphone.org",
+            localIp = "10.0.0.5",
+            localPort = 45123,
+            callId = "linphone-call-1",
+            cseq = 1,
+            localRtpPort = 10000,
+            fromTag = "gw123",
+            callerIdNumber = fromUserNoName,
+            callerIdName = fromDisplayNoName
+        )
+        assertTrue(
+            "Expected Linphone From header with username in URI and caller in display name, got:\n$invite",
+            invite.contains("From: \"+905551234567\" <sip:t-switch_pusher@sip.linphone.org>;tag=gw123\r\n")
+        )
+    }
+
+    @Test
+    fun customAsteriskInvitePreservesCallerIdInFromUser() {
+        val (fromUser, fromDisplay) = SipClient.buildInviteFromParts(
+            serverDomain = "pbx.example.com",
+            username = "gw-user",
+            localSendMode = false,
+            callerIdNumber = "+905551234567",
+            callerIdName = "Alice"
+        )
+        assertEquals("+905551234567", fromUser)
+        assertEquals("Alice", fromDisplay)
+
+        val (localFromUser, localFromDisplay) = SipClient.buildInviteFromParts(
+            serverDomain = "sip.linphone.org",
+            username = "gw-user",
+            localSendMode = true,
+            callerIdNumber = "+905551234567",
+            callerIdName = "Alice"
+        )
+        assertEquals("+905551234567", localFromUser)
+        assertEquals("Alice", localFromDisplay)
+
+        val (fallbackUser, fallbackDisplay) = SipClient.buildInviteFromParts(
+            serverDomain = "pbx.example.com",
+            username = "gw-user",
+            localSendMode = false,
+            callerIdNumber = null,
+            callerIdName = null
+        )
+        assertEquals("gw-user", fallbackUser)
+        assertEquals(null, fallbackDisplay)
+    }
+
+    @Test
+    fun localPeerFreshnessExpiresAfter65Seconds() {
+        assertTrue(SipClient.isPeerFresh(1000L, 65_999L))
+        assertFalse(SipClient.isPeerFresh(1000L, 66_001L))
+        assertFalse(SipClient.isPeerFresh(0L, 1000L))
+        assertFalse(SipClient.isPeerFresh(-1L, 1000L))
+
+        val client = SipClient(
+            username = "gw",
+            password = "pw",
+            serverDomain = "192.168.1.85",
+            localSendMode = true
+        )
+        assertEquals(0L, client.lastPeerSeenMs)
+        assertFalse(client.isLocalPeerFresh(nowMs = 1000L))
+        client.suppressLocalResendForCall("call-suppress-1")
+    }
+
+    @Test
+    fun ackAndByeIncludeReversedRouteHeaders() {
+        val routes = listOf("<sip:proxy2;lr>", "<sip:proxy1;lr>")
+
+        val ackRaw = SipBuilder.ack(
+            targetUri = "sip:receiver@10.0.0.2:5061;transport=tls",
+            via = null,
+            toHeader = "<sip:receiver@sip.linphone.org>;tag=remote1",
+            fromHeader = "<sip:t-switch_pusher@sip.linphone.org>;tag=local1",
+            callId = "route-call-1",
+            cseq = 2,
+            username = "t-switch_pusher",
+            localIp = "10.0.0.5",
+            localPort = 45123,
+            routeHeaders = routes
+        )
+        val parsedAck = SipMessage.parse(ackRaw)!!
+        assertEquals(routes, parsedAck.headers("route"))
+        val idxAck2 = ackRaw.indexOf("Route: <sip:proxy2;lr>\r\n")
+        val idxAck1 = ackRaw.indexOf("Route: <sip:proxy1;lr>\r\n")
+        assertTrue("ACK missing Route: <sip:proxy2;lr>", idxAck2 >= 0)
+        assertTrue("ACK missing Route: <sip:proxy1;lr>", idxAck1 > idxAck2)
+
+        val byeRaw = SipBuilder.bye(
+            targetUri = "sip:receiver@10.0.0.2:5061;transport=tls",
+            fromHeader = "<sip:t-switch_pusher@sip.linphone.org>;tag=local1",
+            toHeader = "<sip:receiver@sip.linphone.org>;tag=remote1",
+            callId = "route-call-1",
+            cseq = 3,
+            username = "t-switch_pusher",
+            localIp = "10.0.0.5",
+            localPort = 45123,
+            routeHeaders = routes
+        )
+        val parsedBye = SipMessage.parse(byeRaw)!!
+        assertEquals(routes, parsedBye.headers("route"))
+        val idxBye2 = byeRaw.indexOf("Route: <sip:proxy2;lr>\r\n")
+        val idxBye1 = byeRaw.indexOf("Route: <sip:proxy1;lr>\r\n")
+        assertTrue("BYE missing Route: <sip:proxy2;lr>", idxBye2 >= 0)
+        assertTrue("BYE missing Route: <sip:proxy1;lr>", idxBye1 > idxBye2)
+
+        // Default empty routeHeaders emits no Route header
+        val plainBye = SipBuilder.bye(
+            targetUri = "sip:receiver@pbx.example.com",
+            fromHeader = "<sip:gw@pbx.example.com>;tag=local1",
+            toHeader = "<sip:receiver@pbx.example.com>;tag=remote1",
+            callId = "route-call-2",
+            cseq = 3,
+            username = "gw",
+            localIp = "10.0.0.5",
+            localPort = 5060
+        )
+        assertFalse(plainBye.contains("Route:"))
+    }
+}
