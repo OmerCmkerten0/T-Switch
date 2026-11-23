@@ -11,6 +11,10 @@ import android.telephony.TelephonyManager
 import android.util.Log
 import com.callagent.gateway.RootShell
 import com.callagent.gateway.gsm.GsmCallManager
+import com.callagent.gateway.localsend.PushWakeController
+import com.callagent.gateway.localsend.RoutingDecision
+import com.callagent.gateway.localsend.RoutingMode
+import com.callagent.gateway.localsend.RoutingPolicy
 import com.callagent.gateway.rtp.RtpPacket
 import com.callagent.gateway.rtp.SrtpContext
 import com.callagent.gateway.rtp.RtpSession
@@ -54,6 +58,21 @@ class CallOrchestrator(
     private var activeRtpSession: RtpSession? = null
     private var activeSipCall: SipCall? = null
     private var activeGsmCall: Call? = null
+    /** True when the active call leg is owned by PushWakeController (cloud SIP/RTP). */
+    @Volatile var activeCloudCall: Boolean = false
+        private set
+    /** Active routing policy (HYBRID_LOCAL_IP vs CUSTOM_SIP_WITH_PUSH_WAKE). */
+    @Volatile var routingDecision: RoutingDecision = if (sipClient.localSendMode) {
+        RoutingPolicy.resolve(null, sipClient.serverPort, false)
+    } else {
+        RoutingPolicy.resolve(sipClient.serverDomain, sipClient.serverPort, sipClient.useTls)
+    }
+        private set
+    /** Destination GSM number when an iPhone-first cloud callback is dialing. */
+    @Volatile private var pendingCallbackDest: String? = null
+    @Volatile private var inboundFlowStartedAtMs: Long = 0L
+    @Volatile private var customSipWakeTriggered: Boolean = false
+    @Volatile private var hybridCloudLaunched: Boolean = false
     /** False while the previous RTP/HAL session is still being released. */
     @Volatile private var audioReady = true
 
@@ -272,6 +291,101 @@ class CallOrchestrator(
         BRIDGED,             // Both sides active, audio flowing
         GSM_DIALING,         // Outbound: dialing GSM number
         TEARING_DOWN         // Hanging up
+    }
+
+    fun updateRoutingDecision(decision: RoutingDecision) {
+        routingDecision = decision
+        Log.i(
+            TAG,
+            "Routing decision updated: mode=${decision.mode}, pushWakeOnly=${decision.pushWakeOnly}, " +
+                "server=${decision.customServer}:${decision.customPort}"
+        )
+    }
+
+    /**
+     * iPhone-first Cloud Callback:
+     * Calls `t-switch_receiver` via PushWakeController first; only after iPhone answers (200 OK)
+     * do we start RTP on `"RTP-Start"` and dial [destNumber] over GSM. If iPhone rejects or
+     * times out, GSM is never dialed.
+     */
+    @Synchronized
+    fun startCloudCallback(destNumber: String): Boolean {
+        val cleanDest = destNumber.trim()
+        if (cleanDest.isEmpty()) {
+            Log.w(TAG, "Cloud callback rejected — blank destination")
+            return false
+        }
+        if (bridgeState != BridgeState.IDLE) {
+            Log.w(TAG, "Cloud callback rejected — bridge busy ($bridgeState)")
+            return false
+        }
+        if (!PushWakeController.isConfigured(context)) {
+            Log.w(TAG, "Cloud callback rejected — PushKit is not configured")
+            return false
+        }
+
+        val rtpPort = try {
+            allocateRtpPort()
+        } catch (e: Exception) {
+            Log.e(TAG, "Cloud callback failed to allocate RTP port: ${e.message}")
+            return false
+        }
+
+        val callGen = generation
+        bridgeState = BridgeState.SIP_CALLING
+        activeCloudCall = true
+        pendingCallbackDest = cleanDest
+        lastStateChangeTime = System.currentTimeMillis()
+        listener?.onStateChanged(bridgeState, "iPhone aranıyor (Callback: $cleanDest)")
+
+        PushWakeController.setCallBridgeCallbacks(null)
+        PushWakeController.triggerWakeAsync(
+            context = context,
+            callerNumber = "Callback: $cleanDest",
+            holdMs = 30_000L,
+            localRtpPort = rtpPort,
+            onRinging = {
+                if (generation == callGen && bridgeState == BridgeState.SIP_CALLING) {
+                    bridgeState = BridgeState.SIP_RINGING
+                    listener?.onStateChanged(bridgeState, "iPhone çalıyor (Callback: $cleanDest)")
+                }
+            },
+            onAnswered = { addr, port, pt ->
+                if (generation == callGen &&
+                    (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING)
+                ) {
+                    Log.i(TAG, "Cloud callback answered by iPhone (RTP=$addr:$port pt=$pt) — dialing GSM $cleanDest")
+                    bridgeState = BridgeState.GSM_DIALING
+                    lastStateChangeTime = System.currentTimeMillis()
+                    listener?.onStateChanged(bridgeState, "GSM aranıyor: $cleanDest")
+                    Thread({
+                        startRtp(rtpPort, addr, port, pt)
+                    }, "RTP-Start").start()
+                    val dialed = GsmCallManager.makeCall(context, cleanDest, null, headless = true)
+                    if (!dialed) {
+                        Log.e(TAG, "Cloud callback failed to place GSM call to $cleanDest")
+                        tearDown("GSM araması başlatılamadı")
+                    } else {
+                        schedule(GSM_DIAL_TIMEOUT_MS) {
+                            if (bridgeState == BridgeState.GSM_DIALING && pendingCallbackDest != null) {
+                                Log.w(TAG, "Cloud callback GSM dial timeout for $cleanDest")
+                                tearDown("GSM dial timeout")
+                            }
+                        }
+                    }
+                }
+            },
+            onRejectedOrEnded = { _, reason ->
+                if (generation == callGen) {
+                    tearDown(reason)
+                }
+            },
+            wakeOnly = false,
+            onReInviteRtp = { addr, port ->
+                activeRtpSession?.updateRemoteEndpoint(addr, port)
+            }
+        )
+        return true
     }
 
     fun start() {
@@ -564,14 +678,73 @@ class CallOrchestrator(
 
     /** Handles termination from both SipClient.Listener and SipCall.Listener */
     override fun onCallTerminated(call: SipCall) {
-        Log.i(TAG, "SIP call terminated: ${call.callId} (bridge=$bridgeState, retries=$sipCallRetries)")
-        if (call != activeSipCall) return
+        Log.i(TAG, "SIP call terminated: ${call.callId} (bridge=$bridgeState, retries=$sipCallRetries, cloud=$activeCloudCall)")
+        if (activeCloudCall || call !== activeSipCall) return
+
+        val status = call.finalStatus
+        val mode = routingDecision.mode
+        val pushConfigured = PushWakeController.isConfigured(context)
+        val elapsedMs = if (inboundFlowStartedAtMs > 0L) {
+            System.currentTimeMillis() - inboundFlowStartedAtMs
+        } else 0L
+        val wakeWindowActive = PushWakeController.isWakeActive() || pushConfigured
+
+        if ((bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) &&
+            activeGsmCall != null &&
+            CallFailoverPolicy.shouldRetryCustomSipAfterError(
+                mode = mode,
+                statusCode = status,
+                wakeWindowActive = wakeWindowActive,
+                elapsedMs = elapsedMs
+            )
+        ) {
+            val gsmCall = activeGsmCall!!
+            val (callerNumber, _) = GsmCallManager.callerOf(gsmCall)
+            if (!PushWakeController.isWakeActive() && pushConfigured) {
+                customSipWakeTriggered = true
+                PushWakeController.triggerWakeAsync(
+                    context = context,
+                    callerNumber = callerNumber,
+                    holdMs = (CUSTOM_SIP_WAKE_WINDOW_MS - elapsedMs).coerceAtLeast(3_000L),
+                    wakeOnly = true
+                )
+            }
+            Log.w(TAG, "Custom SIP failed with $status during wake window (${elapsedMs}ms) — retrying in ${CUSTOM_SIP_RETRY_DELAY_MS}ms")
+            listener?.onStateChanged(bridgeState, "iPhone uyandırılıyor — SIP tekrar deneniyor ($status)")
+            activeSipCall = null
+            sipClient.removeCall(call.callId)
+            schedule(CUSTOM_SIP_RETRY_DELAY_MS) {
+                if (bridgeState != BridgeState.SIP_CALLING &&
+                    bridgeState != BridgeState.SIP_RINGING) return@schedule
+                if (activeCloudCall) return@schedule
+                activeGsmCall?.let { handleInboundFlow(it, isRetry = true) }
+                    ?: Log.e(TAG, "Custom SIP retry: GSM call gone, aborting")
+            }
+            return
+        }
+
+        // In HYBRID_LOCAL_IP, if local LAN SIP fails with a non-rejection error before
+        // cloud PushKit has been attempted, hand off cleanly to cloud PushKit once.
+        if (mode == RoutingMode.HYBRID_LOCAL_IP &&
+            (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) &&
+            activeGsmCall != null &&
+            !hybridCloudLaunched &&
+            pushConfigured &&
+            CallFailoverPolicy.shouldFallbackToLocalRingOnError(status)
+        ) {
+            val gsmCall = activeGsmCall!!
+            Log.w(TAG, "Local SIP failed with $status in HYBRID_LOCAL_IP — handing off to cloud PushKit")
+            sipClient.suppressLocalResendForCall(call.callId)
+            sipClient.removeCall(call.callId)
+            activeSipCall = null
+            launchHybridCloudPush(gsmCall, allocateRtpPort(), generation)
+            return
+        }
 
         // If GSM is still ringing and we haven't exhausted retries, try again —
         // but only after a transient failure.  A deliberate answer from the far
         // side (busy, declined, unavailable) must end the GSM call: retrying it
         // re-rang the softphone after the user had rejected the call.
-        val status = call.finalStatus
         val transient = status == 0 || status == 408 || status == 500 || status == 503 || status == 504
         if ((bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING)
             && transient && sipCallRetries < MAX_SIP_RETRIES && activeGsmCall != null) {
@@ -584,7 +757,8 @@ class CallOrchestrator(
             schedule(1000) {
                 if (bridgeState != BridgeState.SIP_CALLING &&
                     bridgeState != BridgeState.SIP_RINGING) return@schedule
-                activeGsmCall?.let { handleInboundFlow(it) }
+                if (activeCloudCall) return@schedule
+                activeGsmCall?.let { handleInboundFlow(it, isRetry = true) }
                     ?: Log.e(TAG, "SIP retry: GSM call gone, aborting")
             }
             return
@@ -595,7 +769,7 @@ class CallOrchestrator(
         // back to GM 8 so it rings locally instead of dropping as missed/rejected.
         val gsmCall = activeGsmCall
         if (gsmCall != null && (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING)
-            && status != 486 && status != 603) {
+            && CallFailoverPolicy.shouldFallbackToLocalRingOnError(status)) {
             fallbackToLocalDevice(gsmCall, "SIP aktarılamadı ($status)")
             return
         }
@@ -707,7 +881,15 @@ class CallOrchestrator(
                 }
             }
             BridgeState.GSM_DIALING -> {
-                if (diallerInitiated) {
+                if (pendingCallbackDest != null) {
+                    // iPhone-first Cloud Callback: iPhone already answered and RTP is running.
+                    val dest = pendingCallbackDest
+                    pendingCallbackDest = null
+                    bridgeState = BridgeState.BRIDGED
+                    lastStateChangeTime = System.currentTimeMillis()
+                    listener?.onStateChanged(bridgeState, "Bridged (callback: $dest)")
+                    Log.i(TAG, "Cloud callback bridge established for $dest")
+                } else if (diallerInitiated) {
                     // DIALLER flow: GSM active → place SIP call to Asterisk (like inbound)
                     diallerInitiated = false
                     bridgeState = BridgeState.GSM_ANSWERED
@@ -752,6 +934,7 @@ class CallOrchestrator(
     }
 
     override fun onGsmCallStateChanged(call: Call, state: Int) {
+        if (GsmCallManager.isLocalFallbackCall(call)) return
         val stateStr = when (state) {
             Call.STATE_DIALING -> "DIALING"
             Call.STATE_RINGING -> "RINGING"
@@ -837,6 +1020,9 @@ class CallOrchestrator(
 
     override fun onCallAnswered(call: SipCall) {
         Log.i(TAG, "SIP call answered: ${call.callId}")
+        if (!activeCloudCall && call === activeSipCall) {
+            PushWakeController.cancelWake("SIP call answered")
+        }
     }
 
     // onCallTerminated is already implemented above (shared by SipClient.Listener and SipCall.Listener)
@@ -850,6 +1036,15 @@ class CallOrchestrator(
     }
 
     override fun onRtpReady(call: SipCall, remoteRtpAddr: String, remoteRtpPort: Int, payloadType: Int) {
+        if (activeCloudCall || call !== activeSipCall) {
+            Log.w(TAG, "onRtpReady ignored — stale or superseded SIP call ${call.callId} (activeCloudCall=$activeCloudCall)")
+            return
+        }
+        PushWakeController.cancelWake("SIP call answered")
+        handleRtpReady(call.localRtpPort, remoteRtpAddr, remoteRtpPort, payloadType)
+    }
+
+    private fun handleRtpReady(localRtpPort: Int, remoteRtpAddr: String, remoteRtpPort: Int, payloadType: Int) {
         val codecName = when (payloadType) {
             RtpPacket.PT_G722 -> "G.722"
             RtpPacket.PT_PCMA -> "PCMA"
@@ -867,7 +1062,6 @@ class CallOrchestrator(
 
             if (gsmAlreadyActive) {
                 Log.i(TAG, "SIP answered (codec=$codecName) — GSM already active, starting RTP now")
-                val localRtpPort = call.localRtpPort
                 Thread({
                     startRtp(localRtpPort, remoteRtpAddr, remoteRtpPort, payloadType)
                     if (bridgeState == BridgeState.IDLE || bridgeState == BridgeState.TEARING_DOWN) {
@@ -885,7 +1079,7 @@ class CallOrchestrator(
                 pendingRtpAddr = remoteRtpAddr
                 pendingRtpPort = remoteRtpPort
                 pendingPayloadType = payloadType
-                pendingLocalRtpPort = call.localRtpPort
+                pendingLocalRtpPort = localRtpPort
 
                 Log.i(TAG, "SIP answered (codec=$codecName) — answering GSM call now")
                 activeGsmCall?.let { GsmCallManager.answerCall(it) }
@@ -893,32 +1087,27 @@ class CallOrchestrator(
             }
         } else if (bridgeState == BridgeState.GSM_ANSWERED) {
             // Edge case: GSM was already answered (e.g. user picked up manually)
-            // before SIP was ready.  Start RTP now.
-            val localRtpPort = call.localRtpPort
-            startRtp(localRtpPort, remoteRtpAddr, remoteRtpPort, payloadType)
-            bridgeState = BridgeState.BRIDGED
-            listener?.onStateChanged(bridgeState, "Bridged (inbound)")
-            Log.i(TAG, "Bridge established (codec=$codecName)")
+            // before SIP was ready.  Start RTP off SIP-Recv thread.
+            Thread({
+                startRtp(localRtpPort, remoteRtpAddr, remoteRtpPort, payloadType)
+                if (bridgeState == BridgeState.IDLE || bridgeState == BridgeState.TEARING_DOWN) {
+                    Log.w(TAG, "Bridge torn down during RTP setup — not transitioning to BRIDGED")
+                    return@Thread
+                }
+                bridgeState = BridgeState.BRIDGED
+                listener?.onStateChanged(bridgeState, "Bridged (inbound)")
+                Log.i(TAG, "Bridge established (codec=$codecName)")
+            }, "RTP-Start").start()
         } else {
             Log.w(TAG, "onRtpReady ignored — bridgeState=$bridgeState (expected SIP_CALLING or SIP_RINGING)")
             listener?.onError("RTP ready but bridge state wrong: $bridgeState")
-            Log.i(TAG, "Inbound bridge established — GSM was already active (codec=$codecName)")
         }
     }
 
     // ── Inbound flow (GSM → SIP) ───────────────────────
 
-    private fun handleInboundFlow(gsmCall: Call) {
-        val (callerNumber, callerName) = GsmCallManager.callerOf(gsmCall)
-        Log.i(TAG, "Inbound flow: placing SIP call for GSM caller $callerNumber ($callerName)")
-
-        bridgeState = BridgeState.SIP_CALLING
-        listener?.onStateChanged(bridgeState, "Calling Asterisk for $callerNumber")
-
-        val rtpPort = allocateRtpPort()
-        val callGen = generation
-
-        val pushCallbacks = com.callagent.gateway.localsend.PushWakeController.CallBridgeCallbacks(
+    private fun buildHybridPushCallbacks(rtpPort: Int, callGen: Long): PushWakeController.CallBridgeCallbacks =
+        PushWakeController.CallBridgeCallbacks(
             localRtpPort = rtpPort,
             onRinging = {
                 if (generation == callGen && bridgeState == BridgeState.SIP_CALLING) {
@@ -933,16 +1122,16 @@ class CallOrchestrator(
                         bridgeState == BridgeState.GSM_ANSWERED)
                 ) {
                     Log.i(TAG, "PushKit SIP leg answered by iPhone: RTP=$remoteRtpAddr:$remoteRtpPort pt=$payloadType")
+                    activeCloudCall = true
                     activeSipCall?.let { localCall ->
-                        if (!localCall.responseReceived && localCall.state != SipCall.State.ANSWERED) {
-                            sipClient.removeCall(localCall.callId)
+                        sipClient.suppressLocalResendForCall(localCall.callId)
+                        runCatching {
+                            if (localCall.state != SipCall.State.TERMINATED) localCall.hangup()
                         }
+                        sipClient.removeCall(localCall.callId)
                     }
-                    val proxyCall = (activeSipCall ?: SipCall("pushkit", SipCall.Direction.OUTBOUND, sipClient)).apply {
-                        localRtpPort = rtpPort
-                    }
-                    activeSipCall = proxyCall
-                    onRtpReady(proxyCall, remoteRtpAddr, remoteRtpPort, payloadType)
+                    activeSipCall = null
+                    handleRtpReady(rtpPort, remoteRtpAddr, remoteRtpPort, payloadType)
                 }
             },
             onRejectedOrEnded = { code, reason ->
@@ -951,83 +1140,213 @@ class CallOrchestrator(
                     if (bridgeState == BridgeState.BRIDGED) {
                         tearDown(reason)
                     } else if (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING) {
-                        if (activeSipCall?.responseReceived != true) {
+                        if (!CallFailoverPolicy.shouldFallbackToLocalRingOnError(code)) {
+                            tearDown(reason)
+                        } else if (activeCloudCall || activeSipCall == null) {
                             activeGsmCall?.let { fallbackToLocalDevice(it, reason) }
                                 ?: tearDown(reason)
                         }
                     }
                 }
-            }
+            },
+            onReInviteRtp = { addr, port ->
+                if (generation == callGen) {
+                    activeRtpSession?.updateRemoteEndpoint(addr, port)
+                }
+            },
+            wakeOnly = false
         )
-        com.callagent.gateway.localsend.PushWakeController.setCallBridgeCallbacks(pushCallbacks)
 
-        if (com.callagent.gateway.localsend.PushWakeController.isConfigured(context) &&
-            sipClient.resolveLocalPeerAddress(context) == null
-        ) {
-            com.callagent.gateway.localsend.PushWakeController.triggerWakeAsync(
-                context = context,
-                callerNumber = callerNumber,
-                holdMs = 22_000L,
-                localRtpPort = rtpPort,
-                onRinging = pushCallbacks.onRinging,
-                onAnswered = pushCallbacks.onAnswered,
-                onRejectedOrEnded = pushCallbacks.onRejectedOrEnded
-            )
-        }
-
-        val sipCall = sipClient.makeCall(
-            targetExtension = inboundSipDestination(gsmCall),
+    private fun launchHybridCloudPush(gsmCall: Call, rtpPort: Int, callGen: Long) {
+        if (generation != callGen || hybridCloudLaunched) return
+        if (!PushWakeController.isConfigured(context)) return
+        val (callerNumber, _) = GsmCallManager.callerOf(gsmCall)
+        val pushCallbacks = buildHybridPushCallbacks(rtpPort, callGen)
+        PushWakeController.setCallBridgeCallbacks(pushCallbacks)
+        hybridCloudLaunched = true
+        activeCloudCall = true
+        PushWakeController.triggerWakeAsync(
+            context = context,
+            callerNumber = callerNumber,
+            holdMs = 22_000L,
             localRtpPort = rtpPort,
-            callerIdNumber = callerNumber,
-            callerIdName = callerName
+            onRinging = pushCallbacks.onRinging,
+            onAnswered = pushCallbacks.onAnswered,
+            onRejectedOrEnded = pushCallbacks.onRejectedOrEnded,
+            wakeOnly = false,
+            onReInviteRtp = pushCallbacks.onReInviteRtp
         )
-        sipCall.listener = this
-        activeSipCall = sipCall
+    }
 
-        Log.i(TAG, "SIP INVITE sent to Asterisk (caller=$callerNumber, rtp=$rtpPort)")
-
-        // Timeout: if the server has not even said "ringing" within 30 s, give
-        // up.  Once it rings (180), the server's own dial timeout decides; ours
-        // only stops a call that rings for ever.  Cutting at 30 s regardless
-        // ended calls the softphone was still ringing for — a push-woken
-        // phone got about 20 s to answer.
-        val sentAt = System.currentTimeMillis()
-        fun check() {
-            if (bridgeState != BridgeState.SIP_CALLING && bridgeState != BridgeState.SIP_RINGING) return
-            if (activeSipCall !== sipCall) return
-            val elapsed = System.currentTimeMillis() - sentAt
-            val ringing = sipCall.state == SipCall.State.RINGING ||
-                bridgeState == BridgeState.SIP_RINGING ||
-                com.callagent.gateway.localsend.PushWakeController.isCallActiveOrRinging
-            if (ringing && elapsed < SIP_RING_MAX_MS) {
-                schedule(5_000) { check() }
-                return
-            }
-            Log.w(TAG, "SIP call timeout — ${if (ringing) "rang ${elapsed / 1000}s" else "no ringing from the server in ${elapsed / 1000}s"}")
-            val gsmCall = activeGsmCall
-            if (gsmCall != null) {
-                fallbackToLocalDevice(gsmCall, if (ringing) "iPhone yanıt vermedi" else "SIP / iPhone ulaşılamadı")
-            } else {
-                tearDown(if (ringing) "No answer" else "Asterisk not answering")
+    private fun watchCustomSipRinging(targetCall: SipCall, callGen: Long) {
+        schedule(CUSTOM_SIP_RING_POLL_MS) {
+            if (generation != callGen || activeSipCall !== targetCall) return@schedule
+            if (bridgeState != BridgeState.SIP_CALLING && bridgeState != BridgeState.SIP_RINGING) return@schedule
+            when (targetCall.state) {
+                SipCall.State.RINGING -> {
+                    if (bridgeState == BridgeState.SIP_CALLING) {
+                        bridgeState = BridgeState.SIP_RINGING
+                        listener?.onStateChanged(bridgeState, "SIP çalıyor")
+                    }
+                    if (PushWakeController.isWakeActive()) {
+                        PushWakeController.cancelWake("custom SIP ringing (180/183)")
+                    }
+                }
+                SipCall.State.ANSWERED -> {
+                    if (PushWakeController.isWakeActive()) {
+                        PushWakeController.cancelWake("custom SIP answered (200)")
+                    }
+                }
+                SipCall.State.TRYING -> {
+                    if (PushWakeController.isWakeActive() || customSipWakeTriggered) {
+                        watchCustomSipRinging(targetCall, callGen)
+                    }
+                }
+                SipCall.State.TERMINATED -> {}
             }
         }
-        schedule(SIP_CALL_TIMEOUT_MS) { check() }
+    }
+
+    private fun handleInboundFlow(gsmCall: Call, isRetry: Boolean = false) {
+        val (callerNumber, callerName) = GsmCallManager.callerOf(gsmCall)
+        val mode = routingDecision.mode
+        Log.i(TAG, "Inbound flow (mode=$mode, retry=$isRetry): placing SIP call for GSM caller $callerNumber ($callerName)")
+
+        if (!isRetry) {
+            inboundFlowStartedAtMs = System.currentTimeMillis()
+            customSipWakeTriggered = false
+            hybridCloudLaunched = false
+        }
+
+        bridgeState = BridgeState.SIP_CALLING
+        listener?.onStateChanged(bridgeState, "Calling SIP for $callerNumber")
+
+        val rtpPort = allocateRtpPort()
+        val callGen = generation
+        val pushConfigured = PushWakeController.isConfigured(context)
+
+        when (mode) {
+            RoutingMode.HYBRID_LOCAL_IP -> {
+                val pushCallbacks = buildHybridPushCallbacks(rtpPort, callGen)
+                PushWakeController.setCallBridgeCallbacks(pushCallbacks)
+
+                val startLocal = CallFailoverPolicy.shouldStartWithLocalPeer(mode, sipClient.isLocalPeerFresh())
+                if (startLocal || !pushConfigured) {
+                    val sipCall = sipClient.makeCall(
+                        targetExtension = inboundSipDestination(gsmCall),
+                        localRtpPort = rtpPort,
+                        callerIdNumber = callerNumber,
+                        callerIdName = callerName
+                    )
+                    sipCall.listener = this
+                    activeSipCall = sipCall
+                    Log.i(TAG, "HYBRID_LOCAL_IP: local SIP INVITE sent (caller=$callerNumber, rtp=$rtpPort, peerFresh=$startLocal)")
+
+                    if (startLocal && pushConfigured) {
+                        schedule(LOCAL_PEER_GRACE_MS) {
+                            if (generation != callGen) return@schedule
+                            if (bridgeState != BridgeState.SIP_CALLING && bridgeState != BridgeState.SIP_RINGING) return@schedule
+                            if (activeSipCall !== sipCall) return@schedule
+                            if (!sipCall.responseReceived) {
+                                Log.i(
+                                    TAG,
+                                    "Local peer silent after ${LOCAL_PEER_GRACE_MS}ms — suppressing local resend and starting cloud PushKit"
+                                )
+                                sipClient.suppressLocalResendForCall(sipCall.callId)
+                                sipClient.removeCall(sipCall.callId)
+                                activeSipCall = null
+                                launchHybridCloudPush(gsmCall, rtpPort, callGen)
+                            }
+                        }
+                    }
+                } else {
+                    Log.i(TAG, "HYBRID_LOCAL_IP: local peer stale/absent — launching cloud PushKit directly (caller=$callerNumber, rtp=$rtpPort)")
+                    launchHybridCloudPush(gsmCall, rtpPort, callGen)
+                }
+            }
+
+            RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE -> {
+                // Custom SIP Invariant: PushKit runs strictly wakeOnly=true and never bridges media.
+                PushWakeController.setCallBridgeCallbacks(null)
+                val sipCall = sipClient.makeCall(
+                    targetExtension = inboundSipDestination(gsmCall),
+                    localRtpPort = rtpPort,
+                    callerIdNumber = callerNumber,
+                    callerIdName = callerName
+                )
+                sipCall.listener = this
+                activeSipCall = sipCall
+                Log.i(TAG, "CUSTOM_SIP_WITH_PUSH_WAKE: SIP INVITE sent to ${routingDecision.customServer}:${routingDecision.customPort} (caller=$callerNumber, rtp=$rtpPort)")
+
+                if (!isRetry && pushConfigured) {
+                    schedule(CUSTOM_SIP_WAKE_DELAY_MS) {
+                        if (generation != callGen || activeSipCall !== sipCall) return@schedule
+                        if (bridgeState == BridgeState.SIP_CALLING &&
+                            sipCall.state == SipCall.State.TRYING &&
+                            !customSipWakeTriggered &&
+                            PushWakeController.isConfigured(context)
+                        ) {
+                            customSipWakeTriggered = true
+                            Log.i(TAG, "Custom SIP still TRYING after ${CUSTOM_SIP_WAKE_DELAY_MS}ms — firing wake-only PushKit")
+                            PushWakeController.triggerWakeAsync(
+                                context = context,
+                                callerNumber = callerNumber,
+                                holdMs = CUSTOM_SIP_WAKE_WINDOW_MS,
+                                wakeOnly = true
+                            )
+                            watchCustomSipRinging(sipCall, callGen)
+                        }
+                    }
+                } else if (isRetry && (PushWakeController.isWakeActive() || customSipWakeTriggered)) {
+                    watchCustomSipRinging(sipCall, callGen)
+                }
+            }
+        }
+
+        if (!isRetry) {
+            // Timeout: if the server has not even said "ringing" within 30 s, give
+            // up.  Once it rings (180), the server's own dial timeout decides; ours
+            // only stops a call that rings for ever.  Cutting at 30 s regardless
+            // ended calls the softphone was still ringing for — a push-woken
+            // phone got about 20 s to answer.
+            val sentAt = System.currentTimeMillis()
+            fun check() {
+                if (bridgeState != BridgeState.SIP_CALLING && bridgeState != BridgeState.SIP_RINGING) return
+                val elapsed = System.currentTimeMillis() - sentAt
+                val ringing = activeSipCall?.state == SipCall.State.RINGING ||
+                    bridgeState == BridgeState.SIP_RINGING ||
+                    (activeCloudCall && PushWakeController.isCallActiveOrRinging)
+                if (ringing && elapsed < SIP_RING_MAX_MS) {
+                    schedule(5_000) { check() }
+                    return
+                }
+                Log.w(TAG, "SIP call timeout — ${if (ringing) "rang ${elapsed / 1000}s" else "no ringing from the server in ${elapsed / 1000}s"}")
+                val currentGsmCall = activeGsmCall
+                if (currentGsmCall != null) {
+                    fallbackToLocalDevice(currentGsmCall, if (ringing) "iPhone yanıt vermedi" else "SIP / iPhone ulaşılamadı")
+                } else {
+                    tearDown(if (ringing) "No answer" else "Asterisk not answering")
+                }
+            }
+            schedule(SIP_CALL_TIMEOUT_MS) { check() }
+        }
     }
 
     private fun canAttemptSipForward(): Boolean {
-        val pushReady = com.callagent.gateway.localsend.PushWakeController.isConfigured(context)
-        return if (sipClient.localSendMode) {
-            sipClient.resolveLocalPeerAddress(context) != null || pushReady
-        } else {
-            sipClient.registered || pushReady
+        val pushReady = PushWakeController.isConfigured(context)
+        return when (routingDecision.mode) {
+            RoutingMode.HYBRID_LOCAL_IP ->
+                sipClient.resolveLocalPeerAddress(context) != null || pushReady
+            RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE ->
+                sipClient.registered || pushReady
         }
     }
 
     @Synchronized
     private fun fallbackToLocalDevice(gsmCall: Call, reason: String) {
         Log.w(TAG, "Fallback to GM 8 local call: $reason")
-        com.callagent.gateway.localsend.PushWakeController.setCallBridgeCallbacks(null)
-        com.callagent.gateway.localsend.PushWakeController.cancelWake(reason)
+        PushWakeController.setCallBridgeCallbacks(null)
+        PushWakeController.cancelWake(reason)
         activeSipCall?.let { sip ->
             runCatching {
                 if (sip.state != SipCall.State.TERMINATED) sip.hangup()
@@ -1035,6 +1354,11 @@ class CallOrchestrator(
             sipClient.removeCall(sip.callId)
         }
         activeSipCall = null
+        activeCloudCall = false
+        pendingCallbackDest = null
+        inboundFlowStartedAtMs = 0L
+        customSipWakeTriggered = false
+        hybridCloudLaunched = false
         activeGsmCall = null
         pendingIncoming = null
         pendingRtpAddr = null
@@ -1195,8 +1519,8 @@ class CallOrchestrator(
         diallerInitiated = false
         Log.i(TAG, "Tearing down bridge: $reason")
         GsmCallManager.dtmfRelay.cancel()
-        com.callagent.gateway.localsend.PushWakeController.setCallBridgeCallbacks(null)
-        com.callagent.gateway.localsend.PushWakeController.cancelWake(reason)
+        PushWakeController.setCallBridgeCallbacks(null)
+        PushWakeController.cancelWake(reason)
 
         try {
             activeRtpSession?.let {
@@ -1226,6 +1550,11 @@ class CallOrchestrator(
                 sipClient.removeCall(it.callId)
             }
             activeSipCall = null
+            activeCloudCall = false
+            pendingCallbackDest = null
+            inboundFlowStartedAtMs = 0L
+            customSipWakeTriggered = false
+            hybridCloudLaunched = false
 
             // In the outbound flow Telecom can create the Call object and
             // publish it to GsmCallManager just before the InCallService
@@ -1358,8 +1687,8 @@ class CallOrchestrator(
         Log.w(TAG, "Force-resetting bridge: $reason")
         gsmStateWatchdog?.cancel(false)
         gsmStateWatchdog = null
-        com.callagent.gateway.localsend.PushWakeController.setCallBridgeCallbacks(null)
-        com.callagent.gateway.localsend.PushWakeController.cancelWake(reason)
+        PushWakeController.setCallBridgeCallbacks(null)
+        PushWakeController.cancelWake(reason)
         try {
             activeRtpSession?.let {
                 audioReady = false
@@ -1374,6 +1703,11 @@ class CallOrchestrator(
             }
         } catch (_: Exception) {}
         activeSipCall = null
+        activeCloudCall = false
+        pendingCallbackDest = null
+        inboundFlowStartedAtMs = 0L
+        customSipWakeTriggered = false
+        hybridCloudLaunched = false
         try {
             activeGsmCall?.disconnect()
         } catch (_: Exception) {}
@@ -1390,6 +1724,11 @@ class CallOrchestrator(
 
     companion object {
         private const val TAG = "CallOrchestrator"
+        private const val LOCAL_PEER_GRACE_MS = 1_500L
+        private const val CUSTOM_SIP_WAKE_DELAY_MS = 1_200L
+        private const val CUSTOM_SIP_RETRY_DELAY_MS = 2_000L
+        private const val CUSTOM_SIP_WAKE_WINDOW_MS = 20_000L
+        private const val CUSTOM_SIP_RING_POLL_MS = 150L
         private const val SIP_CALL_TIMEOUT_MS = 30_000L
         /** Safety net once the server reports ringing (its own dial timeout normally ends it first). */
         private const val SIP_RING_MAX_MS = 70_000L
