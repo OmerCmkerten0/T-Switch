@@ -13,7 +13,10 @@ object SipAuth {
 
     /** Parse WWW-Authenticate or Proxy-Authenticate header parameters */
     fun parseChallenge(msg: SipMessage): AuthParams? {
-        val authHeader = msg.header("www-authenticate") ?: msg.header("proxy-authenticate")
+        val wwwHeader = msg.header("www-authenticate")
+        val proxyHeader = msg.header("proxy-authenticate")
+        val isProxy = (msg.statusCode == 407) || (wwwHeader == null && proxyHeader != null)
+        val authHeader = (if (isProxy) (proxyHeader ?: wwwHeader) else (wwwHeader ?: proxyHeader))
             ?: return null
 
         if (!authHeader.lowercase().startsWith("digest")) return null
@@ -29,10 +32,18 @@ object SipAuth {
 
         val realm = params["realm"] ?: return null
         val nonce = params["nonce"] ?: return null
-        return AuthParams(realm, nonce, params["opaque"], params["qop"])
+        val algorithm = params["algorithm"]?.takeIf { it.isNotBlank() }?.uppercase() ?: "MD5"
+        return AuthParams(
+            realm = realm,
+            nonce = nonce,
+            opaque = params["opaque"],
+            qop = params["qop"],
+            isProxy = isProxy,
+            algorithm = algorithm
+        )
     }
 
-    /** Build Authorization header for REGISTER / INVITE */
+    /** Build Authorization or Proxy-Authorization header for REGISTER / INVITE / MESSAGE */
     fun buildAuthHeader(
         method: String,
         uri: String,
@@ -41,8 +52,11 @@ object SipAuth {
         params: AuthParams,
         ncCount: Int = 1
     ): String {
-        val ha1 = md5("$username:${params.realm}:$password")
-        val ha2 = md5("$method:$uri")
+        val useSha256 = params.algorithm.equals("SHA-256", ignoreCase = true)
+        val algoName = if (useSha256) "SHA-256" else "MD5"
+
+        val ha1 = digestHex("$username:${params.realm}:$password", algoName)
+        val ha2 = digestHex("$method:$uri", algoName)
 
         val qopToken = params.qop
             ?.split(",")
@@ -53,18 +67,19 @@ object SipAuth {
         val cnonce = UUID.randomUUID().toString().replace("-", "").take(16)
 
         val response = if (qopToken != null) {
-            md5("$ha1:${params.nonce}:$ncHex:$cnonce:$qopToken:$ha2")
+            digestHex("$ha1:${params.nonce}:$ncHex:$cnonce:$qopToken:$ha2", algoName)
         } else {
-            md5("$ha1:${params.nonce}:$ha2")
+            digestHex("$ha1:${params.nonce}:$ha2", algoName)
         }
 
+        val headerName = if (params.isProxy) "Proxy-Authorization" else "Authorization"
         return buildString {
-            append("Authorization: Digest username=\"$username\", ")
+            append("$headerName: Digest username=\"$username\", ")
             append("realm=\"${params.realm}\", ")
             append("nonce=\"${params.nonce}\", ")
             append("uri=\"$uri\", ")
             append("response=\"$response\", ")
-            append("algorithm=MD5")
+            append("algorithm=$algoName")
             if (qopToken != null) {
                 append(", qop=$qopToken, nc=$ncHex, cnonce=\"$cnonce\"")
             }
@@ -81,9 +96,9 @@ object SipAuth {
         params: AuthParams
     ): String = buildAuthHeader("INVITE", uri, username, password, params)
 
-    private fun md5(input: String): String {
-        val digest = MessageDigest.getInstance("MD5")
-        val bytes = digest.digest(input.toByteArray())
+    private fun digestHex(input: String, algorithm: String): String {
+        val digest = MessageDigest.getInstance(algorithm)
+        val bytes = digest.digest(input.toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
@@ -91,6 +106,8 @@ object SipAuth {
         val realm: String,
         val nonce: String,
         val opaque: String?,
-        val qop: String?
+        val qop: String?,
+        val isProxy: Boolean = false,
+        val algorithm: String = "MD5"
     )
 }

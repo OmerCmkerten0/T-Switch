@@ -160,10 +160,10 @@ class TlsSipTransport(
 
     /**
      * Bytes read but not yet consumed as a message.  A single read can return
-     * half a message or three of them; this is what makes the difference
-     * invisible to the caller.
+     * half a message or three of them; this byte-accurate framer makes the
+     * difference invisible to the caller and avoids UTF-8 length deadlocks.
      */
-    private val pending = StringBuilder()
+    private val frameBuffer = TlsFrameBuffer()
 
     override val isOpen: Boolean
         get() = socket?.let { it.isConnected && !it.isClosed } == true
@@ -212,7 +212,7 @@ class TlsSipTransport(
         socket = s
         input = s.inputStream
         output = s.outputStream
-        pending.setLength(0)
+        frameBuffer.clear()
         log("TLS connected to $host:$port (${s.session.protocol}, ${s.session.cipherSuite})")
     }
 
@@ -228,7 +228,7 @@ class TlsSipTransport(
         // Anything already buffered may hold a complete message, so try before
         // going back to the socket -- otherwise a read that delivered two
         // messages would strand the second until more traffic arrived.
-        takeMessage()?.let { return it to peer }
+        frameBuffer.takeMessage()?.let { return it to peer }
 
         val ins = input ?: return null
         val buf = ByteArray(4096)
@@ -239,43 +239,10 @@ class TlsSipTransport(
                 // caller reconnects rather than spinning on a dead stream.
                 throw java.io.EOFException("TLS connection closed by server")
             }
-            pending.append(String(buf, 0, n, Charsets.UTF_8))
-            takeMessage()?.let { it to peer }
+            frameBuffer.append(buf, 0, n)
+            frameBuffer.takeMessage()?.let { it to peer }
         } catch (_: SocketTimeoutException) {
             null
-        }
-    }
-
-    /**
-     * Pull one complete message off [pending], or null if there isn't one yet.
-     *
-     * A SIP message over a stream is framed by its Content-Length: headers run
-     * to the first blank line, and exactly that many bytes of body follow.
-     * Guessing from the blank line alone would truncate every message with a
-     * body, which here means every SDP offer and every inbound SMS.
-     */
-    private fun takeMessage(): String? {
-        while (true) {
-            // RFC 5626 keepalives are bare CRLFs between messages.  They are
-            // not messages and must not be parsed as one.
-            var start = 0
-            while (start < pending.length &&
-                (pending[start] == '\r' || pending[start] == '\n')
-            ) start++
-            if (start > 0) pending.delete(0, start)
-
-            val headerEnd = pending.indexOf("\r\n\r\n")
-            if (headerEnd < 0) return null
-            val headers = pending.substring(0, headerEnd)
-
-            val bodyLen = CONTENT_LENGTH.find(headers)
-                ?.groupValues?.get(1)?.trim()?.toIntOrNull() ?: 0
-            val total = headerEnd + 4 + bodyLen
-            if (pending.length < total) return null
-
-            val msg = pending.substring(0, total)
-            pending.delete(0, total)
-            return msg
         }
     }
 
@@ -284,17 +251,11 @@ class TlsSipTransport(
         socket = null
         input = null
         output = null
-        pending.setLength(0)
+        frameBuffer.clear()
     }
 
     private companion object {
         const val TAG = "TlsSipTransport"
         const val CONNECT_TIMEOUT_MS = 10_000
-
-        /** Both spellings are legal; `l` is the compact form (RFC 3261 §7.3.3). */
-        val CONTENT_LENGTH = Regex(
-            "^(?:Content-Length|l)\\s*:\\s*(\\d+)\\s*$",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
-        )
     }
 }

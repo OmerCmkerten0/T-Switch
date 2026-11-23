@@ -8,7 +8,7 @@ import com.callagent.gateway.rtp.SrtpKeys
  */
 class SipMessage private constructor(
     val startLine: String,
-    val headers: Map<String, String>,
+    val headers: Map<String, List<String>>,
     val body: String
 ) {
 
@@ -30,7 +30,16 @@ class SipMessage private constructor(
         get() = if (isRequest) normalizedStartLine.trim().split(Regex("\\s+"), limit = 3).getOrNull(1) else null
 
     fun header(name: String): String? =
-        headers[name.lowercase()]
+        headers[name.lowercase()]?.firstOrNull()
+
+    fun headers(name: String): List<String> =
+        headers[name.lowercase()].orEmpty()
+
+    val viaHeaders: List<String>
+        get() = headers("via")
+
+    val recordRouteHeaders: List<String>
+        get() = headers("record-route").flatMap(::splitCommaOutsideAngleBrackets)
 
     val callId: String? get() = header("call-id")
     val cseq: String? get() = header("cseq")
@@ -233,16 +242,12 @@ class SipMessage private constructor(
 
     /** Serialize this message back to a SIP packet string */
     fun encode(): String {
-        val sb = StringBuilder()
-        sb.append(startLine).append("\r\n")
-        for ((_, value) in headers) {
-            // headers stored lowercase key, but we need proper casing — use raw lines
-        }
-        // We store raw header lines for serialization
         return raw ?: buildString {
             append(startLine).append("\r\n")
-            headers.forEach { (k, v) ->
-                append("${k}: ${v}\r\n")
+            headers.forEach { (k, values) ->
+                values.forEach { v ->
+                    append("${k}: ${v}\r\n")
+                }
             }
             append("\r\n")
             append(body)
@@ -264,24 +269,71 @@ class SipMessage private constructor(
             if (lines.isEmpty() || lines[0].trim().isEmpty()) return null
 
             val startLine = lines[0].trimStart('\uFEFF')
-            val headers = LinkedHashMap<String, String>()
+            val headers = LinkedHashMap<String, MutableList<String>>()
             var previousKey: String? = null
             for (i in 1 until lines.size) {
                 val line = lines[i]
                 if (line.startsWith(" ") || line.startsWith("\t")) {
-                    previousKey?.let { headers[it] = "${headers[it]} ${line.trim()}" }
+                    previousKey?.let { key ->
+                        val values = headers[key]
+                        if (values != null && values.isNotEmpty()) {
+                            values[values.lastIndex] = "${values.last()} ${line.trim()}"
+                        }
+                    }
                     continue
                 }
                 val colonIdx = line.indexOf(':')
                 if (colonIdx > 0) {
                     val key = line.substring(0, colonIdx).trim().lowercase()
                     val value = line.substring(colonIdx + 1).trim()
-                    headers[key] = value
+                    headers.getOrPut(key) { mutableListOf() }.add(value)
                     previousKey = key
                 }
             }
 
             return SipMessage(startLine, headers, body).also { it.raw = data }
+        }
+
+        private fun splitCommaOutsideAngleBrackets(headerValue: String): List<String> {
+            val result = mutableListOf<String>()
+            val current = StringBuilder()
+            var inQuotes = false
+            var escaped = false
+            var angleDepth = 0
+            for (ch in headerValue) {
+                if (escaped) {
+                    current.append(ch)
+                    escaped = false
+                    continue
+                }
+                when {
+                    ch == '\\' && inQuotes -> {
+                        current.append(ch)
+                        escaped = true
+                    }
+                    ch == '"' -> {
+                        inQuotes = !inQuotes
+                        current.append(ch)
+                    }
+                    !inQuotes && ch == '<' -> {
+                        angleDepth++
+                        current.append(ch)
+                    }
+                    !inQuotes && ch == '>' -> {
+                        if (angleDepth > 0) angleDepth--
+                        current.append(ch)
+                    }
+                    !inQuotes && angleDepth == 0 && ch == ',' -> {
+                        val token = current.toString().trim()
+                        if (token.isNotEmpty()) result.add(token)
+                        current.setLength(0)
+                    }
+                    else -> current.append(ch)
+                }
+            }
+            val tail = current.toString().trim()
+            if (tail.isNotEmpty()) result.add(tail)
+            return result
         }
 
         private fun extractTag(header: String): String? {
@@ -323,8 +375,28 @@ object SipBuilder {
     @Volatile
     var transport: String = "UDP"
 
+    private fun contactParamFor(transportOverride: String? = null): String {
+        val effective = transportOverride ?: transport
+        return when {
+            effective.equals("TLS", ignoreCase = true) -> ";transport=tls"
+            effective.equals("TCP", ignoreCase = true) -> ";transport=tcp"
+            else -> ""
+        }
+    }
+
     private val contactParam: String
-        get() = if (transport == "TLS") ";transport=tls" else ""
+        get() = contactParamFor(null)
+
+    private fun StringBuilder.appendVias(msg: SipMessage) {
+        val vias = msg.viaHeaders
+        if (vias.isEmpty()) {
+            append("Via: ${msg.via}\r\n")
+        } else {
+            for (v in vias) {
+                append("Via: $v\r\n")
+            }
+        }
+    }
 
     private fun branch(): String = "z9hG4bK${(100000000..999999999).random()}"
     private fun tag(): String = "gw${(100000000..999999999).random()}"
@@ -342,7 +414,7 @@ object SipBuilder {
             append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
             append("To: <sip:$username@$domain>\r\n")
-            append("From: <sip:$username@$localIp>;tag=${tag()}\r\n")
+            append("From: <sip:$username@$domain>;tag=${tag()}\r\n")
             append("Call-ID: $callId\r\n")
             append("CSeq: $cseq REGISTER\r\n")
             append("Contact: <sip:$username@$localIp:$localPort$contactParam>;expires=3600\r\n")
@@ -432,13 +504,7 @@ object SipBuilder {
     ): String {
         val to = msg.to ?: ""
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
-        val rawVia = msg.via ?: ""
-        // Echo rport and received so NAT/LAN-aware clients like Zoiper see their exact socket binding
-        val viaWithRport = if (rawVia.contains("rport", ignoreCase = true) && !rawVia.contains("rport=")) {
-            rawVia.replaceFirst(Regex("rport", RegexOption.IGNORE_CASE), "received=$peerIp;rport=$peerPort")
-        } else {
-            rawVia
-        }
+        val vias = msg.viaHeaders
         val contactHdr = msg.header("contact")?.takeIf { it.isNotBlank() && it != "*" }
             ?.let {
                 if (it.contains("expires=", ignoreCase = true)) {
@@ -450,7 +516,19 @@ object SipBuilder {
             ?: "<sip:$peerUser@$peerIp:$peerPort>;expires=60"
         return buildString {
             append("SIP/2.0 200 OK\r\n")
-            append("Via: $viaWithRport\r\n")
+            if (vias.isEmpty()) {
+                append("Via: \r\n")
+            } else {
+                vias.forEachIndexed { idx, rawVia ->
+                    // Echo rport and received on topmost Via so NAT/LAN-aware clients like Zoiper see their exact socket binding
+                    val viaLine = if (idx == 0 && rawVia.contains("rport", ignoreCase = true) && !rawVia.contains("rport=")) {
+                        rawVia.replaceFirst(Regex("rport", RegexOption.IGNORE_CASE), "received=$peerIp;rport=$peerPort")
+                    } else {
+                        rawVia
+                    }
+                    append("Via: $viaLine\r\n")
+                }
+            }
             append("To: $toWithTag\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
@@ -480,7 +558,7 @@ object SipBuilder {
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
         return buildString {
             append("SIP/2.0 $code $reason\r\n")
-            append("Via: ${msg.via}\r\n")
+            appendVias(msg)
             append("To: $toWithTag\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
@@ -499,21 +577,23 @@ object SipBuilder {
         srtp: SrtpKeys? = null,
         srtpTag: Int = 1,
         answeredPayloadType: Int? = null,
-        telephoneEventPt: Int? = 101
+        telephoneEventPt: Int? = 101,
+        transportOverride: String? = null
     ): String {
         val to = msg.to ?: ""
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
         val sdp = if (localRtpPort != null) {
             buildSdp(localIp, localRtpPort, srtp, srtpTag, answeredPayloadType, telephoneEventPt)
         } else null
+        val contactTransportParam = contactParamFor(transportOverride)
         return buildString {
             append("SIP/2.0 200 OK\r\n")
-            append("Via: ${msg.via}\r\n")
+            appendVias(msg)
             append("To: $toWithTag\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$contactTransportParam>\r\n")
             if (sdp != null) {
                 append("Content-Type: application/sdp\r\n")
                 append("Content-Length: ${sdp.length}\r\n\r\n")
@@ -526,7 +606,7 @@ object SipBuilder {
 
     fun trying100(msg: SipMessage): String = buildString {
         append("SIP/2.0 100 Trying\r\n")
-        append("Via: ${msg.via}\r\n")
+        appendVias(msg)
         append("To: ${msg.to}\r\n")
         append("From: ${msg.from}\r\n")
         append("Call-ID: ${msg.callId}\r\n")
@@ -540,7 +620,7 @@ object SipBuilder {
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
         return buildString {
             append("SIP/2.0 180 Ringing\r\n")
-            append("Via: ${msg.via}\r\n")
+            appendVias(msg)
             append("To: $toWithTag\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
@@ -560,7 +640,7 @@ object SipBuilder {
         val toWithTag = if (to.contains(";tag=")) to else "$to;tag=$toTag"
         return buildString {
             append("SIP/2.0 $code $reason\r\n")
-            append("Via: ${msg.via}\r\n")
+            appendVias(msg)
             append("To: $toWithTag\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
@@ -667,7 +747,7 @@ object SipBuilder {
         }
         return buildString {
             append("SIP/2.0 200 OK\r\n")
-            append("Via: ${msg.via}\r\n")
+            appendVias(msg)
             append("To: ${msg.to}\r\n")
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
