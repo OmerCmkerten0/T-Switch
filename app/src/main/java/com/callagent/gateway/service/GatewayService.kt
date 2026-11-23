@@ -31,8 +31,15 @@ import com.callagent.gateway.R
 import com.callagent.gateway.RootShell
 import com.callagent.gateway.bridge.CallOrchestrator
 import com.callagent.gateway.gsm.GsmCallManager
+import com.callagent.gateway.localsend.CommandAuthorization
 import com.callagent.gateway.localsend.HotspotHelper
+import com.callagent.gateway.localsend.InboundMessageAction
+import com.callagent.gateway.localsend.LocalIpPinController
 import com.callagent.gateway.localsend.LocalSendController
+import com.callagent.gateway.localsend.PushWakeController
+import com.callagent.gateway.localsend.RoutingDecision
+import com.callagent.gateway.localsend.RoutingMode
+import com.callagent.gateway.localsend.RoutingPolicy
 import com.callagent.gateway.net.StunClient
 import com.callagent.gateway.sip.SipClient
 import java.net.Inet4Address
@@ -49,6 +56,7 @@ import kotlin.concurrent.thread
 class GatewayService : Service() {
 
     private var sipClient: SipClient? = null
+    @Volatile private var cloudSipClient: SipClient? = null
     private var orchestrator: CallOrchestrator? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -59,6 +67,10 @@ class GatewayService : Service() {
     private var cfgUser = ""
     private var cfgPass = ""
     private var currentLocalIp = ""
+    /** Underlying interface IP before any /32 hotspot alias pin, for change detection. */
+    private var currentNetworkIp = ""
+    @Volatile private var activeRoutingDecision: RoutingDecision =
+        RoutingPolicy.resolve(null, 5060, false)
 
     // ── Call tracking ───────────────────────────────────
     private var onlineSince = 0L
@@ -261,12 +273,59 @@ class GatewayService : Service() {
 
     private val networkCheckRunning = AtomicBoolean(false)
 
+    private fun resolveCurrentRouting(
+        prefs: android.content.SharedPreferences,
+        rawServer: String? = prefs.getString("server", ""),
+        port: Int = prefs.getInt("port", 5060)
+    ): RoutingDecision {
+        val cleaned = rawServer?.trim().orEmpty().let { if (it == "0.0.0.0") "" else it }
+        val tls = prefs.getBoolean("sip_tls", false)
+        val pinnedIp = prefs.getString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP)
+        return RoutingPolicy.resolve(
+            customSipServer = cleaned,
+            customSipPort = port,
+            customSipTls = tls,
+            pinnedLocalIp = pinnedIp
+        )
+    }
+
+    private fun stopSipClients() {
+        orchestrator?.stop()
+        sipClient?.stop()
+        cloudSipClient?.stop()
+        orchestrator = null
+        sipClient = null
+        cloudSipClient = null
+    }
+
+    private fun ensureForeground(
+        state: NotifState = notifState,
+        statusText: String = notifStatusText
+    ) {
+        val notification = buildNotification(state, statusText)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching {
+                startForeground(
+                    activeNotificationId(),
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                )
+            }.onFailure {
+                startForeground(activeNotificationId(), notification)
+            }
+        } else {
+            startForeground(activeNotificationId(), notification)
+        }
+    }
+
     private fun checkNetworkChanged() {
         // Skip if no prior IP (first start handles its own init)
         if (currentLocalIp.isEmpty()) return
-        val localSend = getSharedPreferences("gateway", MODE_PRIVATE)
-            .getBoolean("local_send_enabled", false)
-        if (!localSend && cfgServer.isEmpty()) return
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val decision = resolveCurrentRouting(prefs, cfgServer, cfgPort)
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        if (!isHybrid && decision.customServer.isEmpty()) return
         // During an active call, skip network checks — cellular SUSPENDED
         // is normal and WiFi handles SIP/RTP traffic.
         val busy = orchestrator?.bridgeState?.let {
@@ -276,17 +335,23 @@ class GatewayService : Service() {
         if (!networkCheckRunning.compareAndSet(false, true)) return
         thread(name = "net-check", isDaemon = true) {
             try {
-                val newIp = if (localSend) {
-                    HotspotHelper.detectHotspotFast(this).ipAddress.takeIf { it != "0.0.0.0" } ?: getLocalIp()
+                val newIp = if (isHybrid) {
+                    val hs = HotspotHelper.detectHotspotFast(this)
+                    when {
+                        hs.active && hs.ipAddress != "0.0.0.0" -> hs.ipAddress
+                        hs.wifiIpAddress.isNotEmpty() -> hs.wifiIpAddress
+                        else -> getLocalIp()
+                    }
                 } else {
                     getLocalIp()
                 }
                 if (newIp == "0.0.0.0") return@thread
-                val ipChanged = newIp != currentLocalIp
+                val baselineIp = currentNetworkIp.ifEmpty { currentLocalIp }
+                val ipChanged = newIp != baselineIp
                 val notRegistered = sipClient?.registered != true
                 if (ipChanged || notRegistered) {
                     if (ipChanged) {
-                        broadcastLog("NET: IP changed $currentLocalIp → $newIp, reconnecting")
+                        broadcastLog("NET: IP changed $baselineIp → $newIp, reconnecting")
                         com.callagent.gateway.localsend.LocalMdnsResponder.announceNow(this)
                     } else {
                         broadcastLog("NET: registration lost, reconnecting")
@@ -300,9 +365,10 @@ class GatewayService : Service() {
     }
 
     private fun reconnect() {
-        val localSend = getSharedPreferences("gateway", MODE_PRIVATE)
-            .getBoolean("local_send_enabled", false)
-        if (stopped || (!localSend && cfgServer.isEmpty())) return
+        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        val decision = resolveCurrentRouting(prefs, cfgServer, cfgPort)
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        if (stopped || (!isHybrid && decision.customServer.isEmpty())) return
         clearStaleInitializing()
         if (!initializing.compareAndSet(false, true)) {
             Log.i(TAG, "Reconnect skipped — already initializing")
@@ -314,11 +380,8 @@ class GatewayService : Service() {
         broadcastStatus("STARTING", "Reconnecting...")
         updateNotification(NotifState.WARN, "Connecting")
 
-        // Tear down existing client
-        orchestrator?.stop()
-        sipClient?.stop()
-        orchestrator = null
-        sipClient = null
+        // Tear down existing clients
+        stopSipClients()
 
         val gen = initGeneration.incrementAndGet()
         thread(name = "gateway-reconnect") {
@@ -429,6 +492,11 @@ class GatewayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Always satisfy Android O+ startForegroundService() contract before
+        // any action branch (including ACTION_MONITOR or early stopSelf()).
+        val initialText = if (sipClient == null && !initializing.get()) "Başlatılıyor…" else notifStatusText
+        val initialState = if (sipClient == null && !initializing.get()) NotifState.WARN else notifState
+        ensureForeground(initialState, initialText)
         clearStaleInitializing()
         when (intent?.action) {
             ACTION_START -> startGateway(intent)
@@ -454,18 +522,12 @@ class GatewayService : Service() {
             }
             ACTION_APPLY_CONFIG -> applyConfigChange()
             ACTION_SMS_SEND -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
                 dispatchOutbox()
             }
             ACTION_SMS_REPORT -> {
-                startForeground(activeNotificationId(), buildNotification(notifState))
                 reportOutbox(intent.getStringExtra(EXTRA_SMS_ID))
             }
             ACTION_SMS_FLUSH -> {
-                // Started with startForegroundService() from the SMS receiver,
-                // so the foreground promise has to be honoured — with the
-                // notification it already has, not a new one.
-                startForeground(activeNotificationId(), buildNotification(notifState))
                 flushSmsQueue("received")
             }
             ACTION_DIAL -> dialFromDialler(intent)
@@ -531,27 +593,38 @@ class GatewayService : Service() {
         // nothing until the service happened to restart.  Measured both ways
         // -- quiet to normal and back -- and neither moved without this.
         runCatching {
-            startForeground(activeNotificationId(), buildNotification(notifState))
+            ensureForeground(notifState, notifStatusText)
             cancelStaleNotification()
         }.onFailure { Log.w(TAG, "Could not re-post notification: ${it.message}") }
         thread(name = "notif-visibility") {
             applyNotificationVisibility()
             silenceDefaultSmsApp()
         }
-        val localSend = prefs.getBoolean("local_send_enabled", false)
-        cfgServer = prefs.getString("server", "") ?: ""
-        cfgPort = prefs.getInt("port", 5060)
-        cfgUser = prefs.getString("user", "") ?: ""
-        cfgPass = prefs.getString("pass", "") ?: ""
-        if (localSend) {
-            if (cfgServer.isEmpty()) cfgServer = "0.0.0.0"
+
+        com.callagent.gateway.sip.SipBuilder.codecMode =
+            prefs.getString("codec", "g722") ?: "g722"
+        com.callagent.gateway.gsm.GsmCallManager.agentVolumeStep =
+            prefs.getInt("agent_vol_step", 0)
+
+        val rawServer = prefs.getString("server", "").orEmpty().trim()
+        val savedPort = resolveEffectivePort(intentPort = -1, savedPort = prefs.getInt("port", 5060))
+        val decision = resolveCurrentRouting(prefs, rawServer, savedPort)
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        prefs.edit().putBoolean("local_send_enabled", isHybrid).apply()
+
+        activeRoutingDecision = decision
+        cfgServer = decision.customServer
+        cfgPort = decision.customPort
+        cfgUser = prefs.getString("user", "").orEmpty().trim()
+        cfgPass = prefs.getString("pass", "").orEmpty()
+        if (isHybrid) {
             if (cfgUser.isEmpty()) cfgUser = "tswitch"
         } else if (cfgServer.isEmpty() || cfgUser.isEmpty()) {
             broadcastLog("ERROR: Missing server or username")
             broadcastStatus("ERROR", "Missing SIP configuration")
             return
         }
-        broadcastLog("Config changed (LocalSend=$localSend) — rebuilding SIP client")
+        broadcastLog("Config changed (mode=${decision.mode}, pinnedIp=${decision.pinnedLocalIp}) — rebuilding SIP client")
         // A save is an explicit instruction, so it outranks a bring-up that
         // is already in flight; the generation counter makes discarding that
         // one safe.
@@ -582,7 +655,9 @@ class GatewayService : Service() {
                 val queue = SmsStore.pending(this)
                 if (queue.isEmpty()) return@thread
                 val sip = sipClient
-                if (sip == null || !sip.registered) {
+                val cloud = cloudSipClient
+                val canDeliver = (sip != null && sip.registered) || (cloud != null && cloud.registered)
+                if (!canDeliver) {
                     broadcastLog("SMS: ${queue.size} queued, waiting for registration")
                     scheduleSmsRetry()
                     return@thread
@@ -644,32 +719,60 @@ class GatewayService : Service() {
      * SIP account — the same routing key an inbound *call* uses, so the server
      * can map an SMS to an assistant exactly as it maps a call.
      */
-    private fun sendSmsOverSip(sip: SipClient, sms: PendingSms): Int {
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+    private fun sendSmsOverSip(sip: SipClient?, sms: PendingSms): Int {
         val configuredOwn = ownNumberForSub(sms.subId)
         val target = sms.to.ifEmpty { configuredOwn }.ifEmpty { cfgUser }
         val headers = mutableListOf(
             "X-SMS-Id: ${sms.id}",
             "X-SMS-From: ${sms.from}",
             "X-SMS-To: $target",
-            "X-SMS-Received: ${smsTimeFormat.format(java.util.Date(sms.receivedAt))}",
+            "X-SMS-Received: ${smsTimeFormat.get()!!.format(java.util.Date(sms.receivedAt))}",
             "X-SMS-Parts: ${sms.parts}"
         )
         if (sms.subId >= 0) headers += "X-SMS-Sim-Sub: ${sms.subId}"
         if (sms.slot >= 0) headers += "X-SMS-Sim-Slot: ${sms.slot}"
         if (sms.carrier.isNotEmpty()) headers += "X-SMS-Sim-Carrier: ${sms.carrier}"
         if (sms.attempts > 0) headers += "X-SMS-Attempt: ${sms.attempts + 1}"
-        if (sip.localSendMode) {
-            val peer = sip.resolveLocalPeerAddress(this) ?: return 0
-            val peerUser = sip.registeredPeerUser.ifEmpty { target }
-            return sip.sendSipMessageToAddress(
-                targetAddress = peer,
-                targetUri = "sip:$peerUser@${peer.first}:${peer.second}",
-                fromUser = sms.from.ifEmpty { "unknown" },
-                body = sms.text,
-                extraHeaders = headers
-            )
+
+        if (activeRoutingDecision.mode == RoutingMode.HYBRID_LOCAL_IP || sip?.localSendMode == true) {
+            var localCode = 0
+            if (sip != null && sip.isLocalPeerFresh()) {
+                val peer = sip.registeredPeer ?: sip.resolveLocalPeerAddress(this)
+                if (peer != null) {
+                    val peerUser = sip.registeredPeerUser.ifEmpty { target }
+                    localCode = sip.sendSipMessageToAddress(
+                        targetAddress = peer,
+                        targetUri = "sip:$peerUser@${peer.first}:${peer.second}",
+                        fromUser = sms.from.ifEmpty { "unknown" },
+                        body = sms.text,
+                        extraHeaders = headers
+                    )
+                    if (localCode in 200..299) {
+                        return localCode
+                    }
+                }
+            }
+            val cloud = cloudSipClient
+            if (cloud != null && cloud.registered) {
+                val receiverUser = PushWakeController.getReceiverUser(this)
+                val cloudDomain = PushWakeController.getDomain(this)
+                val pusherUser = PushWakeController.getPusherUser(this)
+                val cloudCode = cloud.sendSipMessage(
+                    targetUri = "sip:$receiverUser@$cloudDomain",
+                    fromUser = pusherUser,
+                    fromDisplayName = sms.from.ifEmpty { "SMS" },
+                    body = "📩 [${sms.from}]\n${sms.text}",
+                    extraHeaders = headers
+                )
+                if (cloudCode in 200..299) {
+                    broadcastLog("SMS: ${sms.id} delivered via cloud fallback ($receiverUser@$cloudDomain)")
+                }
+                return cloudCode
+            }
+            return localCode
         }
+
+        if (sip == null) return 0
         val targetUri = "sip:$target@$cfgServer"
         return sip.sendSipMessage(
             targetUri = targetUri,
@@ -679,17 +782,38 @@ class GatewayService : Service() {
         )
     }
 
+    private fun extractSipDomain(headerValue: String?): String? {
+        if (headerValue.isNullOrBlank()) return null
+        val sipIdx = headerValue.indexOf("sips:", ignoreCase = true)
+            .takeIf { it >= 0 }
+            ?: headerValue.indexOf("sip:", ignoreCase = true)
+        val searchFrom = if (sipIdx >= 0) sipIdx + 4 else 0
+        val atIdx = headerValue.indexOf('@', searchFrom)
+        if (atIdx < 0) return null
+        return headerValue.substring(atIdx + 1)
+            .substringBefore('>')
+            .substringBefore(';')
+            .substringBefore(':')
+            .substringBefore('?')
+            .trim()
+            .ifEmpty { null }
+    }
+
     // ── SIP → SMS ───────────────────────────────────────
 
     /**
-     * A MESSAGE from the server asking us to send an SMS.
+     * A MESSAGE from the server or LAN peer asking us to execute a command,
+     * initiate a callback, or send an outbound GSM SMS.
      *
      * Runs on the SIP receive thread, so it does nothing slow: the request is
-     * validated, written to the outbox and answered.  Answering 202 is a
-     * promise that the message is now ours to deliver and report on, so
-     * nothing is answered 202 until it is safely on disk.
+     * authorized via [CommandAuthorization.classify], validated, written to the
+     * outbox and answered.
      */
-    fun onSmsSendRequest(msg: com.callagent.gateway.sip.SipMessage): Pair<Int, List<String>> {
+    fun onSmsSendRequest(
+        msg: com.callagent.gateway.sip.SipMessage,
+        isLocalTransport: Boolean = sipClient?.localSendMode == true,
+        sourcePeer: Pair<String, Int>? = null
+    ): Pair<Int, List<String>> {
         val type = msg.contentType?.lowercase().orEmpty()
         if (type.isNotEmpty() && !type.startsWith("text/plain")) {
             broadcastLog("SMS send refused: unsupported Content-Type '$type'")
@@ -699,14 +823,82 @@ class GatewayService : Service() {
             ?: msg.requestUri?.let { msg.extractUser(it) }
             ?: msg.to?.let { msg.extractUser(it) })
             ?.trim().orEmpty()
-        val rawText = msg.body
+        val fromUser = msg.from?.let { msg.extractUser(it) }
+        val fromDomain = extractSipDomain(msg.from)
+        val pairedReceiverUser = PushWakeController.getReceiverUser(this)
+        val allowedCloudDomains = setOfNotNull(
+            PushWakeController.getDomain(this).takeIf { it.isNotBlank() },
+            cfgServer.takeIf { it.isNotBlank() && it != "0.0.0.0" }
+        )
 
-        // Intercept Virtual Command Terminal messages (0000 / !komut / $ bash)
-        if (LocalSendController.isTerminalCommand(target, rawText)) {
-            LocalSendController.handleTerminalMessage(this, target, rawText)
-            return 200 to emptyList()
+        val action = CommandAuthorization.classify(
+            isLocalTransport = isLocalTransport,
+            target = target,
+            fromUser = fromUser,
+            fromDomain = fromDomain,
+            sourcePeer = sourcePeer,
+            registeredLocalPeer = sipClient?.registeredPeer,
+            pairedReceiverUser = pairedReceiverUser,
+            allowedCloudDomains = allowedCloudDomains,
+            gatewayUser = cfgUser,
+            body = msg.body
+        )
+
+        return when (action) {
+            is InboundMessageAction.CallbackCall -> {
+                if (!PushWakeController.isConfigured(this)) {
+                    broadcastLog("CALLBACK refused (503): PushKit not configured")
+                    return 503 to emptyList()
+                }
+                val orch = orchestrator
+                if (orch == null) {
+                    broadcastLog("CALLBACK refused (503): orchestrator not ready")
+                    return 503 to emptyList()
+                }
+                if (orch.startCloudCallback(action.destinationNumber)) {
+                    broadcastLog("CALLBACK: started cloud callback to ${action.destinationNumber}")
+                    200 to emptyList()
+                } else {
+                    broadcastLog("CALLBACK refused (486): bridge busy (${action.destinationNumber})")
+                    486 to emptyList()
+                }
+            }
+            is InboundMessageAction.OutboundSmsCommand -> {
+                enqueueOutboundGsmSms(msg, action.destinationNumber, action.text)
+            }
+            is InboundMessageAction.TerminalCommand -> {
+                LocalSendController.handleTerminalMessage(this, target, action.commandText)
+                200 to emptyList()
+            }
+            is InboundMessageAction.DirectGsmSms -> {
+                val isPublicCloud = !isLocalTransport && (
+                    activeRoutingDecision.mode == RoutingMode.HYBRID_LOCAL_IP ||
+                        cfgServer.contains("linphone.org", ignoreCase = true) ||
+                        fromDomain?.contains("linphone.org", ignoreCase = true) == true
+                    )
+                if (isPublicCloud) {
+                    val senderMatchesPaired = !fromUser.isNullOrBlank() &&
+                        pairedReceiverUser.isNotBlank() &&
+                        fromUser.trim().equals(pairedReceiverUser.trim(), ignoreCase = true)
+                    if (!senderMatchesPaired) {
+                        broadcastLog("SMS send refused (403): unauthorized public-cloud sender '$fromUser@$fromDomain'")
+                        return 403 to emptyList()
+                    }
+                }
+                enqueueOutboundGsmSms(msg, action.destinationNumber, action.text)
+            }
+            is InboundMessageAction.Reject -> {
+                broadcastLog("SIP MESSAGE refused (${action.statusCode}): ${action.reason}")
+                action.statusCode to emptyList()
+            }
         }
+    }
 
+    private fun enqueueOutboundGsmSms(
+        msg: com.callagent.gateway.sip.SipMessage,
+        target: String,
+        rawText: String
+    ): Pair<Int, List<String>> {
         // Reduce to ASCII before anything measures or stores the text, so the
         // part count, the encoding and the log all describe what actually
         // goes out rather than what the server sent.
@@ -783,12 +975,7 @@ class GatewayService : Service() {
         )
         broadcastLog("SMS send: $id to $target accepted (${text.length} chars, sub=$subId)")
 
-        val intent = Intent(this, GatewayService::class.java).apply { action = ACTION_SMS_SEND }
-        try {
-            startForegroundService(intent)
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not schedule SMS dispatch: ${e.message}")
-        }
+        dispatchOutbox()
         return 202 to cost
     }
 
@@ -1009,8 +1196,12 @@ class GatewayService : Service() {
             broadcastLog("SMS report $event for ${sms.id} deferred — not registered")
             return false
         }
-        val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+        // In hybrid/local mode there is no Asterisk report endpoint; mark reported so outbox prunes cleanly.
+        if (sip.localSendMode || cfgServer.isBlank()) {
+            return true
+        }
         val own = ownNumberForSub(sms.subId).ifEmpty { cfgUser }
+        val nowIso = smsTimeFormat.get()!!.format(java.util.Date())
         val body = org.json.JSONObject().apply {
             put("id", sms.id)
             put("event", event)
@@ -1027,7 +1218,7 @@ class GatewayService : Service() {
             // chance to tell the server either.
             if (sms.smsc.isNotEmpty()) put("smsc", sms.smsc)
             if (sms.encoding.isNotEmpty()) put("encoding", sms.encoding)
-            put("at", smsTimeFormat.format(java.util.Date()))
+            put("at", nowIso)
         }.toString()
 
         val headers = mutableListOf(
@@ -1035,7 +1226,7 @@ class GatewayService : Service() {
             "X-SMS-Event: $event",
             "X-SMS-To: ${sms.to}",
             "X-SMS-Parts: ${maxOf(sms.parts, 1)}",
-            "X-SMS-At: ${smsTimeFormat.format(java.util.Date())}"
+            "X-SMS-At: $nowIso"
         )
         if (sms.status.isNotEmpty()) headers += "X-SMS-Status: ${sms.status}"
         if (sms.lastError.isNotEmpty()) headers += "X-SMS-Reason: ${sms.lastError}"
@@ -1123,11 +1314,8 @@ class GatewayService : Service() {
             return
         }
 
-        // Clean up any existing client before starting a new one
-        orchestrator?.stop()
-        sipClient?.stop()
-        orchestrator = null
-        sipClient = null
+        // Clean up any existing clients before starting new ones
+        stopSipClients()
         stopped = false
 
         // Load call stats from persistent store so counters survive restarts
@@ -1141,13 +1329,18 @@ class GatewayService : Service() {
         currentAttemptStart = 0L
 
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val localSend = prefs.getBoolean("local_send_enabled", false)
-        val server = intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "callagent.pro") ?: ""
-        val port = intent?.getIntExtra(EXTRA_PORT, 5060) ?: prefs.getInt("port", 5060)
-        val username = intent?.getStringExtra(EXTRA_USER) ?: prefs.getString("user", "") ?: ""
+        val rawServer = (intent?.getStringExtra(EXTRA_SERVER) ?: prefs.getString("server", "") ?: "").trim()
+        val intentPort = intent?.getIntExtra(EXTRA_PORT, -1) ?: -1
+        val savedPort = prefs.getInt("port", 5060)
+        val port = resolveEffectivePort(intentPort, savedPort)
+        val username = (intent?.getStringExtra(EXTRA_USER) ?: prefs.getString("user", "") ?: "").trim()
         val password = intent?.getStringExtra(EXTRA_PASS) ?: prefs.getString("pass", "") ?: ""
 
-        if (!localSend && (server.isEmpty() || username.isEmpty())) {
+        val decision = resolveCurrentRouting(prefs, rawServer, port)
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        prefs.edit().putBoolean("local_send_enabled", isHybrid).apply()
+
+        if (!isHybrid && (decision.customServer.isEmpty() || username.isEmpty())) {
             Log.e(TAG, "Missing SIP configuration")
             broadcastLog("ERROR: Missing server or username")
             broadcastStatus("ERROR", "Missing SIP configuration")
@@ -1155,11 +1348,11 @@ class GatewayService : Service() {
             return
         }
 
-        // Save for restart if non-placeholder values were provided
-        if (server.isNotEmpty() && server != "0.0.0.0") {
+        // Save for restart if non-placeholder custom SIP values were provided
+        if (!isHybrid && decision.customServer.isNotEmpty()) {
             prefs.edit()
-                .putString("server", server)
-                .putInt("port", port)
+                .putString("server", decision.customServer)
+                .putInt("port", decision.customPort)
                 .putString("user", username)
                 .putString("pass", password)
                 .apply()
@@ -1176,25 +1369,14 @@ class GatewayService : Service() {
         com.callagent.gateway.gsm.GsmCallManager.agentVolumeStep =
             prefs.getInt("agent_vol_step", 0)
 
-        cfgServer = if (localSend && server.isEmpty()) "0.0.0.0" else server
-        cfgPort = port
-        cfgUser = if (localSend && username.isEmpty()) "tswitch" else username
+        activeRoutingDecision = decision
+        cfgServer = decision.customServer
+        cfgPort = decision.customPort
+        cfgUser = if (isHybrid && username.isEmpty()) "tswitch" else username
         cfgPass = password
 
         notifStatusText = "Connecting"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(
-                activeNotificationId(),
-                buildNotification(NotifState.WARN, "Connecting")
-            )
-        }
+        ensureForeground(NotifState.WARN, "Connecting")
         acquireLocks()
         initializing.set(true)
         initializingSince = System.currentTimeMillis()
@@ -1224,23 +1406,23 @@ class GatewayService : Service() {
             return
         }
 
-        // A previous client must be gone before another socket is bound to
+        // Previous clients must be gone before another socket is bound to
         // :5060.  reconnect() already does this, but startGateway() and the
         // stale-init recovery reach here without it.
-        sipClient?.let {
-            Log.w(TAG, "initSipClient: stopping previous SIP client")
+        if (sipClient != null || cloudSipClient != null) {
+            Log.w(TAG, "initSipClient: stopping previous SIP client(s)")
             broadcastLog("SIP: stopping previous client before rebind")
-            orchestrator?.stop()
-            it.stop()
-            orchestrator = null
-            sipClient = null
+            stopSipClients()
         }
 
         checkDefaultDialer()
         checkSmsPermission()
 
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val localSend = prefs.getBoolean("local_send_enabled", false)
+        val decision = resolveCurrentRouting(prefs, cfgServer, cfgPort)
+        activeRoutingDecision = decision
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        prefs.edit().putBoolean("local_send_enabled", isHybrid).apply()
         val activeNetwork = (getSystemService(Context.CONNECTIVITY_SERVICE)
             as ConnectivityManager).activeNetwork
 
@@ -1248,19 +1430,41 @@ class GatewayService : Service() {
         val publicIp: String
         val useTls: Boolean
         val bindPort: Int
+        val sipServerDomain: String
+        val sipServerPort: Int
 
-        if (localSend) {
+        if (isHybrid) {
+            val pinApplied = LocalIpPinController.applyForCurrentNetwork(this, decision.pinnedLocalIp)
+            broadcastLog("IP PIN: ${decision.pinnedLocalIp} (applied=$pinApplied)")
+
             val hs = HotspotHelper.detectHotspot(this)
-            localIp = if (hs.ipAddress != "0.0.0.0") hs.ipAddress else getLocalIp()
+            val detectedNetIp = when {
+                hs.active && hs.ipAddress != "0.0.0.0" -> hs.ipAddress
+                hs.wifiIpAddress.isNotEmpty() -> hs.wifiIpAddress
+                else -> getLocalIp()
+            }
+            currentNetworkIp = detectedNetIp
+            localIp = if (pinApplied) decision.pinnedLocalIp else detectedNetIp
             currentLocalIp = localIp
             publicIp = localIp
             useTls = false
             bindPort = 5060
-            cfgServer = localIp
+            sipServerDomain = localIp
+            sipServerPort = 5060
+            cfgServer = ""
             if (cfgUser.isEmpty()) cfgUser = "tswitch"
-            broadcastLog("LOCAL SEND: Hotspot=${hs.isActive} (${hs.ifaceName}) IP=$localIp:5060")
+            broadcastLog(
+                "HYBRID LOCAL IP: Hotspot=${hs.active} (${hs.ifaceName}) " +
+                    "WiFi=${hs.wifiIpAddress.ifEmpty { "-" }} IP=$localIp:5060"
+            )
         } else {
+            // Custom SIP server mode: tear down cloud companion and clear local IP pin.
+            cloudSipClient?.stop()
+            cloudSipClient = null
+            LocalIpPinController.clearPin(decision.pinnedLocalIp)
+
             localIp = getLocalIp()
+            currentNetworkIp = localIp
             currentLocalIp = localIp
             broadcastLog("Local IP: $localIp")
 
@@ -1291,25 +1495,29 @@ class GatewayService : Service() {
                 return
             }
 
-            useTls = prefs.getBoolean("sip_tls", false)
-            if (useTls) broadcastLog("SIP transport: TLS to $cfgServer:$cfgPort")
+            cfgServer = decision.customServer
+            cfgPort = decision.customPort
+            useTls = decision.customUseTls
+            sipServerDomain = decision.customServer
+            sipServerPort = decision.customPort
+            if (useTls) broadcastLog("SIP transport: TLS to $sipServerDomain:$sipServerPort")
             bindPort = 5062
         }
 
         val sip = SipClient(
             username = cfgUser,
             password = cfgPass,
-            serverDomain = cfgServer,
-            serverPort = if (localSend) 5060 else cfgPort,
+            serverDomain = sipServerDomain,
+            serverPort = sipServerPort,
             localIp = localIp,
             localPort = bindPort,
-            network = if (localSend) null else activeNetwork,
+            network = if (isHybrid) null else activeNetwork,
             publicIp = publicIp,
             useTls = useTls,
-            srtpRequested = if (localSend) false else prefs.getBoolean("srtp_enabled", false),
-            localSendMode = localSend
+            srtpRequested = if (isHybrid) false else prefs.getBoolean("srtp_enabled", false),
+            localSendMode = isHybrid
         )
-        if (localSend) {
+        if (isHybrid) {
             sip.onLocalPeerRegistered = { user, addr ->
                 LocalSendController.onZoiperPeerReady(this, addr.first, addr.second)
                 broadcastStatus(
@@ -1321,6 +1529,7 @@ class GatewayService : Service() {
         sipClient = sip
 
         val orch = CallOrchestrator(this, sip)
+        orch.updateRoutingDecision(decision)
         orch.listener = object : CallOrchestrator.OrchestratorListener {
             override fun onStateChanged(state: CallOrchestrator.BridgeState, info: String) {
                 Log.i(TAG, "Bridge: $state - $info")
@@ -1425,7 +1634,12 @@ class GatewayService : Service() {
         orch.start()
 
         sip.logListener = { msg -> broadcastLog("SIP: $msg") }
-        sip.onSmsRequest = { m -> onSmsSendRequest(m) }
+        sip.onSmsRequestWithPeer = { m, peer ->
+            onSmsSendRequest(m, isLocalTransport = isHybrid, sourcePeer = peer)
+        }
+        sip.onSmsRequest = { m ->
+            onSmsSendRequest(m, isLocalTransport = isHybrid, sourcePeer = null)
+        }
         GsmCallManager.logCallback = { msg -> broadcastLog("AUDIO: $msg") }
         RootShell.statusCallback = { msg -> broadcastLog("ROOT: $msg") }
         sip.onConnectionLost = { reconnect() }
@@ -1440,11 +1654,56 @@ class GatewayService : Service() {
 
         try {
             sip.start()
-            if (localSend) {
+            if (isHybrid) {
                 onlineSince = System.currentTimeMillis()
                 updateNotification(NotifState.OK, "Local Send ($localIp)")
-                broadcastLog("[v${BuildConfig.VERSION_NAME}] Local Send aktif: $localIp:5060 (Zoiper bekleniyor)")
+                broadcastLog("[v${BuildConfig.VERSION_NAME}] Hybrid Local IP aktif: $localIp:5060 (Zoiper/Linphone bekleniyor)")
                 broadcastStatus("IDLE", "Local Send ($localIp:5060)")
+                if (PushWakeController.isConfigured(this)) {
+                    val cloudDomain = PushWakeController.getDomain(this)
+                    val cloudUser = PushWakeController.getPusherUser(this)
+                    val cloudPass = PushWakeController.getPassword(this)
+                    val cloudLocalIp = getLocalIp().takeIf { it != "0.0.0.0" } ?: localIp
+                    val cloud = SipClient(
+                        username = cloudUser,
+                        password = cloudPass,
+                        serverDomain = cloudDomain,
+                        serverPort = 5061,
+                        localIp = cloudLocalIp,
+                        localPort = 5063,
+                        network = activeNetwork,
+                        publicIp = cloudLocalIp,
+                        useTls = true,
+                        srtpRequested = false,
+                        localSendMode = false
+                    )
+                    cloud.logListener = { msg -> broadcastLog("CLOUD-SIP: $msg") }
+                    cloud.onSmsRequestWithPeer = { m, peer ->
+                        onSmsSendRequest(m, isLocalTransport = false, sourcePeer = peer)
+                    }
+                    cloud.onSmsRequest = { m ->
+                        onSmsSendRequest(m, isLocalTransport = false, sourcePeer = null)
+                    }
+                    cloud.listener = object : SipClient.Listener {
+                        override fun onRegistered() {
+                            broadcastLog("CLOUD-SIP: registered ($cloudUser@$cloudDomain:5061)")
+                            flushSmsQueue("cloud-registered")
+                        }
+                        override fun onRegistrationFailed() {}
+                        override fun onIncomingCall(call: com.callagent.gateway.sip.SipCall) {
+                            call.reject(486, "Busy Here")
+                        }
+                        override fun onCallTerminated(call: com.callagent.gateway.sip.SipCall) {}
+                    }
+                    if (current() && sipClient === sip) {
+                        cloudSipClient = cloud
+                        runCatching { cloud.start() }
+                            .onFailure { e ->
+                                Log.w(TAG, "Cloud companion SIP start failed: ${e.message}")
+                                broadcastLog("CLOUD-SIP: start deferred (${e.message})")
+                            }
+                    }
+                }
                 thread(name = "localsend-arp-probe") {
                     try {
                         Thread.sleep(1500)
@@ -1456,8 +1715,8 @@ class GatewayService : Service() {
                     } catch (_: Exception) {}
                 }
             } else {
-                broadcastLog("[v${BuildConfig.VERSION_NAME}] SIP client started, registering with $cfgServer:$cfgPort")
-                broadcastStatus("STARTING", "Registering with $cfgServer")
+                broadcastLog("[v${BuildConfig.VERSION_NAME}] SIP client started, registering with $sipServerDomain:$sipServerPort")
+                broadcastStatus("STARTING", "Registering with $sipServerDomain")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start SIP client: ${e.message}", e)
@@ -1473,10 +1732,7 @@ class GatewayService : Service() {
         stopped = true
         onlineSince = 0L
         Log.i(TAG, "Stopping gateway")
-        orchestrator?.stop()
-        sipClient?.stop()
-        orchestrator = null
-        sipClient = null
+        stopSipClients()
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -1484,6 +1740,10 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+        rescueHandler.removeCallbacksAndMessages(null)
+        rescueScheduled = false
+        cloudSipClient?.stop()
+        cloudSipClient = null
         com.callagent.gateway.localsend.LocalMdnsResponder.stop()
         LocalSendController.detach()
         unregisterNetworkCallback()
@@ -1662,8 +1922,7 @@ class GatewayService : Service() {
     // ── Broadcast to MainActivity ────────────────────────
 
     private fun broadcastStatus(state: String, info: String) {
-        val localSend = getSharedPreferences("gateway", MODE_PRIVATE)
-            .getBoolean("local_send_enabled", false)
+        val isHybrid = activeRoutingDecision.mode == RoutingMode.HYBRID_LOCAL_IP
         val peer = sipClient?.registeredPeer
         val intent = Intent(STATUS_ACTION).apply {
             setPackage(packageName)
@@ -1675,7 +1934,11 @@ class GatewayService : Service() {
             // change carrying any other text — "GSM call ended", for one —
             // read as offline while the registration was perfectly alive.
             putExtra("registered", sipClient?.registered == true)
-            putExtra("local_send", localSend)
+            putExtra("local_send", isHybrid)
+            putExtra("routing_mode", activeRoutingDecision.mode.name)
+            putExtra("tls_active", sipClient?.let { it.useTls && !it.localSendMode } == true)
+            putExtra("srtp_active", sipClient?.srtpEnabled == true)
+            putExtra("call_incoming", currentCallIncoming)
             putExtra("local_ip", currentLocalIp)
             putExtra("local_peer", if (peer != null) "${peer.first}:${peer.second}" else "")
             putExtra("online_since", onlineSince)
@@ -1701,7 +1964,7 @@ class GatewayService : Service() {
         // greppable over adb, which is how these get read when something has
         // already gone wrong and the app is not in front of anyone.
         Log.i(TAG, "LOG: $msg")
-        val stamped = "${bufferTimeFormat.format(java.util.Date())}  $msg"
+        val stamped = "${bufferTimeFormat.get()!!.format(java.util.Date())}  $msg"
         synchronized(logBuffer) {
             logBuffer.add(stamped)
             if (logBuffer.size > LOG_BUFFER_SIZE) logBuffer.removeAt(0)
@@ -1849,9 +2112,23 @@ class GatewayService : Service() {
     companion object {
         private const val TAG = "GatewayService"
         private const val LOG_BUFFER_SIZE = 200
+
+        /**
+         * Resolves the effective SIP port from an optional Intent extra and the persisted port.
+         * A missing/invalid [intentPort] (e.g. `-1`) preserves a valid [savedPort] (such as `5061`)
+         * instead of clobbering it back to `5060`.
+         */
+        fun resolveEffectivePort(intentPort: Int, savedPort: Int, defaultPort: Int = 5060): Int = when {
+            intentPort in 1..65535 -> intentPort
+            savedPort in 1..65535 -> savedPort
+            else -> defaultPort
+        }
+
         /** Ring buffer of recent log messages — survives activity pause/resume. */
-        private val bufferTimeFormat =
-            java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+        private val bufferTimeFormat: ThreadLocal<java.text.SimpleDateFormat> =
+            ThreadLocal.withInitial {
+                java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+            }
 
         val logBuffer = mutableListOf<String>()
 
@@ -1911,9 +2188,11 @@ class GatewayService : Service() {
 
         /** X-SMS-Received: ISO 8601 UTC, so the server does not have to guess
          *  at the gateway's local time zone. */
-        private val smsTimeFormat =
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
+        private val smsTimeFormat: ThreadLocal<java.text.SimpleDateFormat> =
+            ThreadLocal.withInitial {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
             }
 
         /**

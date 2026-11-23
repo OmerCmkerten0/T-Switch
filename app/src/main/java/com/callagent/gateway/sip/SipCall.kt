@@ -210,7 +210,8 @@ class SipCall(
                     val ack = SipBuilder.ack(
                         uri, ackVia, msg.to, fromHeader ?: msg.from,
                         callId, ackCseq,
-                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort
+                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
                     )
                     sipClient.sendResponse(ack, peerAddress)
                 }
@@ -235,7 +236,10 @@ class SipCall(
                 Log.i(TAG, "Received BYE for call $callId")
                 // Send 200 OK to BYE
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
+                    SipBuilder.ok200(
+                        msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
+                    ),
                     peerAddress
                 )
                 state = State.TERMINATED
@@ -251,7 +255,10 @@ class SipCall(
             msg.isRequest && msg.method == "CANCEL" -> {
                 Log.i(TAG, "Received CANCEL for call $callId")
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
+                    SipBuilder.ok200(
+                        msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
+                    ),
                     peerAddress
                 )
                 if (state != State.ANSWERED && state != State.TERMINATED) {
@@ -280,7 +287,8 @@ class SipCall(
                     val ack = SipBuilder.ack(
                         uri, originalInvite?.via, msg.to, fromHeader,
                         callId, ackCseq,
-                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort
+                        sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
                     )
                     sipClient.sendResponse(ack, peerAddress)
                 }
@@ -310,7 +318,10 @@ class SipCall(
             // DTMF as SIP INFO (application/dtmf-relay or application/dtmf).
             msg.isRequest && msg.method == "INFO" -> {
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
+                    SipBuilder.ok200(
+                        msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
+                    ),
                     peerAddress
                 )
                 val digit = com.callagent.gateway.rtp.SipInfoDtmf.parse(msg.contentType, msg.body)
@@ -352,7 +363,10 @@ class SipCall(
             // In-dialog OPTIONS (some servers probe established calls).
             msg.isRequest && msg.method == "OPTIONS" -> {
                 sipClient.sendResponse(
-                    SipBuilder.ok200(msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort),
+                    SipBuilder.ok200(
+                        msg, sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
+                        transportOverride = sipClient.viaTransport
+                    ),
                     peerAddress
                 )
                 return true
@@ -402,7 +416,8 @@ class SipCall(
             srtp = if (srtpActive) localSrtpKeys else null,
             srtpTag = srtpTag,
             answeredPayloadType = negotiatedPayloadType,
-            telephoneEventPt = telephoneEventPt
+            telephoneEventPt = telephoneEventPt,
+            transportOverride = sipClient.viaTransport
         )
         sipClient.sendResponse(ok, peerAddress)
         Log.i(TAG, "Answered $what for call $callId (sdp=$hasSdp)")
@@ -428,7 +443,8 @@ class SipCall(
             localRtpPort = localRtpPort, toTag = toTag,
             srtp = localSrtpKeys, srtpTag = srtpTag,
             answeredPayloadType = negotiatedPayloadType,
-            telephoneEventPt = telephoneEventPt
+            telephoneEventPt = telephoneEventPt,
+            transportOverride = sipClient.viaTransport
         )
 
         val address = peerAddress
@@ -459,7 +475,8 @@ class SipCall(
             uri, null, toHeader, fromHeader,
             callId, cseq,
             sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
-            routeHeaders = routeSet
+            routeHeaders = routeSet,
+            transportOverride = sipClient.viaTransport
         )
         sipClient.sendResponse(ack, peerAddress)
         Log.d(TAG, "Sent ACK for call $callId (CSeq: $cseq)")
@@ -517,7 +534,8 @@ class SipCall(
             uri, byeFrom, byeTo,
             callId, localCseq++,
             sipClient.username, sipClient.publicIp, sipClient.advertisedPort,
-            routeHeaders = routeSet
+            routeHeaders = routeSet,
+            transportOverride = sipClient.viaTransport
         )
         sipClient.sendResponse(bye, peerAddress)
         state = State.TERMINATED

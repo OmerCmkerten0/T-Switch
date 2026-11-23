@@ -405,19 +405,22 @@ object SipBuilder {
         username: String, domain: String, serverPort: Int,
         localIp: String, localPort: Int,
         callId: String, cseq: Int,
-        auth: String? = null
+        auth: String? = null,
+        transportOverride: String? = null
     ): String {
         val uri = "sip:$domain:$serverPort"
+        val effectiveTransport = transportOverride ?: transport
+        val cParam = contactParamFor(transportOverride)
         return buildString {
             append("REGISTER $uri SIP/2.0\r\n")
-            append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
+            append("Via: SIP/2.0/$effectiveTransport $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
             append("To: <sip:$username@$domain>\r\n")
             append("From: <sip:$username@$domain>;tag=${tag()}\r\n")
             append("Call-ID: $callId\r\n")
             append("CSeq: $cseq REGISTER\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort$contactParam>;expires=3600\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$cParam>;expires=3600\r\n")
             if (auth != null) append(auth)
             append("Content-Length: 0\r\n\r\n")
         }
@@ -433,21 +436,24 @@ object SipBuilder {
         callerIdNumber: String? = null,
         callerIdName: String? = null,
         auth: String? = null,
-        srtp: SrtpKeys? = null
+        srtp: SrtpKeys? = null,
+        transportOverride: String? = null
     ): String {
         val fromDisplay = if (!callerIdName.isNullOrBlank()) "\"$callerIdName\" " else ""
         val fromUser = callerIdNumber ?: username
         val sdp = buildSdp(localIp, localRtpPort, srtp)
+        val effectiveTransport = transportOverride ?: transport
+        val cParam = contactParamFor(transportOverride)
         return buildString {
             append("INVITE $targetUri SIP/2.0\r\n")
-            append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
+            append("Via: SIP/2.0/$effectiveTransport $localIp:$localPort;branch=${branch()};rport\r\n")
             append("Max-Forwards: 70\r\n")
             append("User-Agent: $userAgent\r\n")
             append("To: <$targetUri>\r\n")
             append("From: $fromDisplay<sip:$fromUser@$domain>;tag=$fromTag\r\n")
             append("Call-ID: $callId\r\n")
             append("CSeq: $cseq INVITE\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$cParam>\r\n")
             if (auth != null) append(auth)
             append("Content-Type: application/sdp\r\n")
             append("Content-Length: ${sdp.length}\r\n\r\n")
@@ -473,11 +479,13 @@ object SipBuilder {
         extraHeaders: List<String> = emptyList(),
         fromTag: String = tag(),
         auth: String? = null,
-        fromDisplayName: String? = null
+        fromDisplayName: String? = null,
+        transportOverride: String? = null
     ): String = buildString {
         val displayPrefix = if (!fromDisplayName.isNullOrBlank()) "\"$fromDisplayName\" " else ""
+        val effectiveTransport = transportOverride ?: transport
         append("MESSAGE $targetUri SIP/2.0\r\n")
-        append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Via: SIP/2.0/$effectiveTransport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
         append("User-Agent: $userAgent\r\n")
         append("To: <$targetUri>\r\n")
@@ -655,10 +663,13 @@ object SipBuilder {
         via: String?, toHeader: String?, fromHeader: String?,
         callId: String?, cseq: Int,
         username: String, localIp: String, localPort: Int,
-        routeHeaders: List<String> = emptyList()
+        routeHeaders: List<String> = emptyList(),
+        transportOverride: String? = null
     ): String = buildString {
+        val effectiveTransport = transportOverride ?: transport
+        val cParam = contactParamFor(transportOverride)
         append("ACK $targetUri SIP/2.0\r\n")
-        append("Via: ${via ?: "SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport"}\r\n")
+        append("Via: ${via ?: "SIP/2.0/$effectiveTransport $localIp:$localPort;branch=${branch()};rport"}\r\n")
         append("Max-Forwards: 70\r\n")
         append("User-Agent: $userAgent\r\n")
         for (r in routeHeaders) {
@@ -668,7 +679,7 @@ object SipBuilder {
         append("From: $fromHeader\r\n")
         append("Call-ID: $callId\r\n")
         append("CSeq: $cseq ACK\r\n")
-        append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
+        append("Contact: <sip:$username@$localIp:$localPort$cParam>\r\n")
         append("Content-Length: 0\r\n\r\n")
     }
 
@@ -677,10 +688,13 @@ object SipBuilder {
         fromHeader: String?, toHeader: String?,
         callId: String?, cseq: Int,
         username: String, localIp: String, localPort: Int,
-        routeHeaders: List<String> = emptyList()
+        routeHeaders: List<String> = emptyList(),
+        transportOverride: String? = null
     ): String = buildString {
+        val effectiveTransport = transportOverride ?: transport
+        val cParam = contactParamFor(transportOverride)
         append("BYE $targetUri SIP/2.0\r\n")
-        append("Via: SIP/2.0/$transport $localIp:$localPort;branch=${branch()};rport\r\n")
+        append("Via: SIP/2.0/$effectiveTransport $localIp:$localPort;branch=${branch()};rport\r\n")
         append("Max-Forwards: 70\r\n")
         append("User-Agent: $userAgent\r\n")
         for (r in routeHeaders) {
@@ -690,7 +704,7 @@ object SipBuilder {
         append("To: $toHeader\r\n")
         append("Call-ID: $callId\r\n")
         append("CSeq: $cseq BYE\r\n")
-        append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
+        append("Contact: <sip:$username@$localIp:$localPort$cParam>\r\n")
         append("Content-Length: 0\r\n\r\n")
     }
 
@@ -725,7 +739,14 @@ object SipBuilder {
      * is worse than admitting the gap.  The Allow list is likewise the real
      * set of handled methods, not the conventional long one.
      */
-    fun optionsResponse(msg: SipMessage, username: String, localIp: String, localPort: Int): String {
+    fun optionsResponse(
+        msg: SipMessage,
+        username: String,
+        localIp: String,
+        localPort: Int,
+        transportOverride: String? = null
+    ): String {
+        val cParam = contactParamFor(transportOverride)
         // A capability description, not an offer: no port is reserved and no
         // crypto line appears.  SRTP keys are per-call and generated when the
         // call is set up -- putting one here would publish a key outside any
@@ -760,7 +781,7 @@ object SipBuilder {
             append("From: ${msg.from}\r\n")
             append("Call-ID: ${msg.callId}\r\n")
             append("CSeq: ${msg.cseq}\r\n")
-            append("Contact: <sip:$username@$localIp:$localPort$contactParam>\r\n")
+            append("Contact: <sip:$username@$localIp:$localPort$cParam>\r\n")
             append("User-Agent: $userAgent\r\n")
             // The real set: CANCEL and MESSAGE included because inbound ones
             // are handled; nothing here is aspirational.

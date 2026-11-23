@@ -102,6 +102,9 @@ class SipClient(
      * given an ephemeral one by the OS and has to advertise that instead.
      */
     val advertisedPort: Int get() = transport?.localPort ?: localPort
+
+    /** Per-client SIP transport token ("UDP" or "TLS") so dual-stack clients never clobber each other. */
+    val viaTransport: String get() = transport?.viaTransport ?: if (useTls && !localSendMode) "TLS" else "UDP"
     /** Pre-resolved server address — avoids DNS on main thread */
     @Volatile private var resolvedServerAddr: InetAddress? = null
     private val cseq = AtomicInteger(1)
@@ -141,6 +144,13 @@ class SipClient(
      * whatever it does must be quick.
      */
     @Volatile var onSmsRequest: ((SipMessage) -> Pair<Int, List<String>>)? = null
+
+    /**
+     * Optional peer-aware variant of [onSmsRequest] that receives the packet's
+     * source `(ip, port)` for sender authorization (e.g. [com.callagent.gateway.localsend.CommandAuthorization]).
+     * When set, takes precedence over [onSmsRequest].
+     */
+    @Volatile var onSmsRequestWithPeer: ((SipMessage, Pair<String, Int>) -> Pair<Int, List<String>>)? = null
 
     private fun uiLog(msg: String) {
         Log.i(TAG, msg)
@@ -246,8 +256,8 @@ class SipClient(
         }
         t.open()
         transport = t
-        // Via must name the transport the request actually goes out over.
-        SipBuilder.transport = t.viaTransport
+        // Note: per-client transportOverride is passed to SipBuilder calls so dual-stack
+        // local UDP + cloud TLS clients never clobber each other's Via/Contact headers.
         sendExecutor = Executors.newSingleThreadExecutor { r ->
             Thread({
                 // Once for the thread, not once per packet: this was building
@@ -342,43 +352,51 @@ class SipClient(
         }
         val msg = SipMessage.parse(data) ?: return
 
-        // In Local Send mode, any incoming SIP request from a LAN softphone
-        // (REGISTER, SUBSCRIBE, OPTIONS, INVITE, MESSAGE) teaches us the peer's
-        // live UDP address so we can send incoming GSM calls & fake SMS to it.
+        // In Local Send mode, incoming SIP requests from a LAN softphone
+        // (REGISTER, SUBSCRIBE, OPTIONS, INVITE) teach us the peer's live UDP
+        // address so we can send incoming GSM calls & fake SMS to it.
+        // MESSAGE requests must NOT overwrite registeredPeer so an unverified
+        // LAN sender cannot spoof authorization before CommandAuthorization runs.
         if (localSendMode && msg.isRequest) {
-            val prevPeer = registeredPeer
-            val callerUser = msg.callerNumber?.takeIf {
-                it.isNotBlank() && it != "unknown" && it != "0000"
-            }
-            val userFromPacket = if (msg.method == "REGISTER") {
-                callerUser
-                    ?: msg.to?.let { msg.extractUser(it) }?.takeIf { it.isNotBlank() && it != "0000" }
-                    ?: registeredPeerUser
+            if (msg.method == "MESSAGE") {
+                if (registeredPeer?.first == address.first) {
+                    lastPeerSeenMs = System.currentTimeMillis()
+                }
             } else {
-                callerUser ?: registeredPeerUser
-            }
-            registeredPeer = address
-            registeredPeerUser = userFromPacket
-            lastPeerSeenMs = System.currentTimeMillis()
-            if (msg.method == "REGISTER") {
-                registered = true
-                lastRegisterTime = lastPeerSeenMs
-                lastServerResponseTime = lastRegisterTime
-                val ok = SipBuilder.registerOk200(msg, userFromPacket, address.first, address.second)
-                sendTo(ok, address)
-                if (prevPeer != address) {
-                    uiLog("Local Send: Zoiper bağlandı ($userFromPacket@${address.first}:${address.second})")
+                val prevPeer = registeredPeer
+                val callerUser = msg.callerNumber?.takeIf {
+                    it.isNotBlank() && it != "unknown" && it != "0000"
+                }
+                val userFromPacket = if (msg.method == "REGISTER") {
+                    callerUser
+                        ?: msg.to?.let { msg.extractUser(it) }?.takeIf { it.isNotBlank() && it != "0000" }
+                        ?: registeredPeerUser
+                } else {
+                    callerUser ?: registeredPeerUser
+                }
+                registeredPeer = address
+                registeredPeerUser = userFromPacket
+                lastPeerSeenMs = System.currentTimeMillis()
+                if (msg.method == "REGISTER") {
+                    registered = true
+                    lastRegisterTime = lastPeerSeenMs
+                    lastServerResponseTime = lastRegisterTime
+                    val ok = SipBuilder.registerOk200(msg, userFromPacket, address.first, address.second)
+                    sendTo(ok, address)
+                    if (prevPeer != address) {
+                        uiLog("Local Send: Zoiper bağlandı ($userFromPacket@${address.first}:${address.second})")
+                        onLocalPeerRegistered?.invoke(userFromPacket, address)
+                    }
+                    resendPendingOutboundInvites(address)
+                    return
+                }
+                if (prevPeer == null) {
+                    uiLog("Local Send: İstemci algılandı ($userFromPacket@${address.first}:${address.second})")
                     onLocalPeerRegistered?.invoke(userFromPacket, address)
                 }
-                resendPendingOutboundInvites(address)
-                return
-            }
-            if (prevPeer == null) {
-                uiLog("Local Send: İstemci algılandı ($userFromPacket@${address.first}:${address.second})")
-                onLocalPeerRegistered?.invoke(userFromPacket, address)
-            }
-            if (prevPeer != address) {
-                resendPendingOutboundInvites(address)
+                if (prevPeer != address) {
+                    resendPendingOutboundInvites(address)
+                }
             }
         }
 
@@ -393,7 +411,10 @@ class SipClient(
 
         // OPTIONS keepalive from server / Zoiper
         if (msg.isRequest && msg.method == "OPTIONS") {
-            val resp = SipBuilder.optionsResponse(msg, username, publicIp, advertisedPort)
+            val resp = SipBuilder.optionsResponse(
+                msg, username, publicIp, advertisedPort,
+                transportOverride = viaTransport
+            )
             sendTo(resp, address)
             return
         }
@@ -445,7 +466,9 @@ class SipClient(
         // Page-mode MESSAGE from the server — an SMS to send.
         if (msg.isRequest && msg.method == "MESSAGE") {
             val (code, extra) = try {
-                onSmsRequest?.invoke(msg) ?: (405 to emptyList())
+                onSmsRequestWithPeer?.invoke(msg, address)
+                    ?: onSmsRequest?.invoke(msg)
+                    ?: (405 to emptyList())
             } catch (e: Exception) {
                 Log.e(TAG, "onSmsRequest failed: ${e.message}", e)
                 500 to emptyList()
@@ -454,9 +477,11 @@ class SipClient(
                 200 -> "OK"
                 202 -> "Accepted"
                 400 -> "Bad Request"
-                405 -> "Method Not Allowed"
+                403 -> "Forbidden"
                 404 -> "Not Found"
+                405 -> "Method Not Allowed"
                 415 -> "Unsupported Media Type"
+                486 -> "Busy Here"
                 503 -> "Service Unavailable"
                 else -> "Error"
             }
@@ -490,7 +515,10 @@ class SipClient(
                 activeCalls.remove(callId)
             }
             // Send 200 OK even for unknown BYE
-            val ok = SipBuilder.ok200(msg, username, publicIp, advertisedPort)
+            val ok = SipBuilder.ok200(
+                msg, username, publicIp, advertisedPort,
+                transportOverride = viaTransport
+            )
             sendTo(ok, address)
             return
         }
@@ -566,7 +594,8 @@ class SipClient(
             username, serverDomain, serverPort,
             publicIp, advertisedPort,
             callIdBase, cseq.getAndIncrement(),
-            auth
+            auth,
+            transportOverride = viaTransport
         )
         sendTo(msg, serverAddress)
     }
@@ -696,7 +725,8 @@ class SipClient(
             fromTag = call.localTag,
             callerIdNumber = fromUser,
             callerIdName = fromDisplayName,
-            srtp = call.localSrtpKeys
+            srtp = call.localSrtpKeys,
+            transportOverride = viaTransport
         )
     }
 
@@ -908,7 +938,8 @@ class SipClient(
                 SipBuilder.message(
                     targetUri, fromUser, domainForFrom, publicIp, advertisedPort,
                     callId, cseq, body, contentType, extraHeaders, fromTag,
-                    auth = null, fromDisplayName = fromDisplayName
+                    auth = null, fromDisplayName = fromDisplayName,
+                    transportOverride = viaTransport
                 ),
                 targetAddress
             )
@@ -928,7 +959,8 @@ class SipClient(
                     SipBuilder.message(
                         targetUri, fromUser, domainForFrom, publicIp, advertisedPort,
                         callId, cseq, body, contentType, extraHeaders, fromTag, auth,
-                        fromDisplayName = fromDisplayName
+                        fromDisplayName = fromDisplayName,
+                        transportOverride = viaTransport
                     ),
                     targetAddress
                 )
@@ -986,7 +1018,8 @@ class SipClient(
             callerIdNumber = fromUser,
             callerIdName = fromDisplayName,
             auth = auth,
-            srtp = call.localSrtpKeys
+            srtp = call.localSrtpKeys,
+            transportOverride = viaTransport
         )
         // The authenticated INVITE has a new CSeq and Via branch; a later
         // early-dialog cancellation must cancel this transaction, not the

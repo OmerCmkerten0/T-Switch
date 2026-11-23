@@ -1038,7 +1038,13 @@
                                 android:textColor="@color/text_label" />
                         </RadioGroup>
 
-                        <TextView style="@style/CfgLabel" android:text="Local Send (Hotspot Üzerinden İnternetsiz Zoiper)" />
+                        <TextView style="@style/CfgLabel" android:text="Sabit Yerel IP (Hotspot / Wi-Fi)" />
+                        <EditText
+                            android:id="@+id/etCfgPinnedIp"
+                            style="@style/CfgField"
+                            android:hint="192.168.1.85"
+                            android:inputType="text" />
+
                         <CheckBox
                             android:id="@+id/cbCfgLocalSend"
                             android:layout_width="match_parent"
@@ -1046,12 +1052,13 @@
                             android:text="Local Send aktif (Hotspot yerel SIP sunucusu)"
                             android:buttonTint="@color/accent"
                             android:textColor="@color/text_label"
-                            android:layout_marginTop="4dp" />
+                            android:layout_marginTop="4dp"
+                            android:visibility="gone" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Hotspot açıkken mobil veri kapalı olsa bile bağlı Zoiper cihazı doğrudan bu cihazın Hotspot IP'si (örn. 192.168.43.1:5060, kullanıcı: tswitch) üzerinden internetsiz arama ve mesaj alır/gönderir."
+                            android:text="Özel SIP sunucusu boş bırakıldığında T-Switch otomatik olarak Sabit Yerel IP (varsayılan 192.168.1.85:5060) + Linphone PushKit hibrit modunda çalışır. Özel bir SIP sunucusu girildiğinde tüm çağrı ve SMS trafiği o sunucuya geçer."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="4dp" />
@@ -1088,9 +1095,9 @@
                             android:textColor="@color/text_hint"
                             android:paddingTop="4dp" />
 
-                        <TextView style="@style/CfgLabel" android:text="SIP Server" />
+                        <TextView style="@style/CfgLabel" android:text="Özel SIP Sunucusu (boşsa Sabit Yerel IP 192.168.1.85)" />
                         <EditText android:id="@+id/etCfgServer" style="@style/CfgField"
-                            android:hint="sip.linphone.org" android:inputType="textUri" />
+                            android:hint="Özel SIP Sunucusu (boşsa Sabit Yerel IP 192.168.1.85)" android:inputType="textUri" />
 
                         <TextView style="@style/CfgLabel" android:text="SIP Port" />
                         <EditText android:id="@+id/etCfgPort" style="@style/CfgField"

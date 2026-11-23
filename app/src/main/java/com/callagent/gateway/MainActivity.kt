@@ -57,6 +57,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.callagent.gateway.localsend.HotspotHelper
+import com.callagent.gateway.localsend.LocalIpPinController
+import com.callagent.gateway.localsend.RoutingDecision
+import com.callagent.gateway.localsend.RoutingMode
+import com.callagent.gateway.localsend.RoutingPolicy
 import com.callagent.gateway.service.CallLogEntry
 import com.callagent.gateway.service.CallLogStore
 import com.callagent.gateway.sms.SmsOutbox
@@ -277,17 +281,29 @@ class MainActivity : AppCompatActivity() {
 
     private var running = false
     private var gsmCallActive = false
+    private var currentCallIncoming = true
     private var onlineSince = 0L
 
-    private val uptimeHandler = Handler(Looper.getMainLooper())
-    private val uptimeRunnable = object : Runnable {
-        override fun run() {
-            if (onlineSince > 0) {
-                val elapsed = (System.currentTimeMillis() - onlineSince) / 1000
-                uptimeHandler.postDelayed(this, 1000)
-            }
-        }
+    private val contactsSearchHandler = Handler(Looper.getMainLooper())
+    private var pendingContactsSearch: Runnable? = null
+
+    private fun resolveRoutingFromPrefs(prefs: android.content.SharedPreferences): RoutingDecision {
+        val rawServer = prefs.getString("server", "").orEmpty().trim()
+        val effectiveServer = if (rawServer == "0.0.0.0") "" else rawServer
+        return RoutingPolicy.resolve(
+            customSipServer = effectiveServer,
+            customSipPort = prefs.getInt("port", 5060),
+            customSipTls = prefs.getBoolean("sip_tls", false),
+            pinnedLocalIp = prefs.getString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP)
+        )
     }
+
+    private fun safeSignalStrength(tm: TelephonyManager?): android.telephony.SignalStrength? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCatching { tm?.signalStrength }.getOrNull()
+        } else {
+            null
+        }
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -297,6 +313,7 @@ class MainActivity : AppCompatActivity() {
                     val info = intent.getStringExtra("info") ?: ""
                     sipRegistered = intent.getBooleanExtra("registered", sipRegistered)
                     serviceCallStart = intent.getLongExtra("call_start", 0L)
+                    currentCallIncoming = intent.getBooleanExtra("call_incoming", currentCallIncoming)
                     lastLocalPeer = intent.getStringExtra("local_peer") ?: lastLocalPeer
                     lastServiceLocalIp = intent.getStringExtra("local_ip") ?: lastServiceLocalIp
                     updateStatus(state, info)
@@ -306,11 +323,6 @@ class MainActivity : AppCompatActivity() {
                     val newOnlineSince = intent.getLongExtra("online_since", 0L)
                     if (newOnlineSince != onlineSince) {
                         onlineSince = newOnlineSince
-                        uptimeHandler.removeCallbacks(uptimeRunnable)
-                        if (onlineSince > 0) {
-                            uptimeRunnable.run()
-                        } else {
-                        }
                     }
 
                     val wasRunning = running
@@ -545,60 +557,84 @@ class MainActivity : AppCompatActivity() {
         if (running) return
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         if (!prefs.getBoolean("autoconnect", true)) return
-        val localSend = prefs.getBoolean("local_send_enabled", false)
-        val server = prefs.getString("server", "") ?: ""
-        val user = prefs.getString("user", "") ?: ""
-        if (!localSend && (server.isEmpty() || user.isEmpty())) return
-        val port = prefs.getInt("port", 5060)
-        val pass = prefs.getString("pass", "") ?: ""
+        val decision = resolveRoutingFromPrefs(prefs)
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        val user = prefs.getString("user", "").orEmpty().trim()
+        if (!isHybrid && (decision.customServer.isEmpty() || user.isEmpty())) return
+        val pass = prefs.getString("pass", "").orEmpty()
         GatewayService.start(
             this,
-            if (localSend && server.isEmpty()) "0.0.0.0" else server,
-            port,
-            if (localSend && user.isEmpty()) "tswitch" else user,
+            if (isHybrid) "" else decision.customServer,
+            decision.customPort,
+            if (isHybrid && user.isEmpty()) "tswitch" else user,
             pass
         )
         running = true
         appendLog(
-            if (localSend) "Auto-starting Local Send gateway"
-            else "Auto-starting gateway: $user@$server:$port"
+            if (isHybrid) "Auto-starting Hybrid Local IP gateway (${decision.pinnedLocalIp}:5060)"
+            else "Auto-starting custom SIP gateway: $user@${decision.customServer}:${decision.customPort}"
         )
     }
 
-    /** One-tap toggle on the Home screen card to enable/disable Local Send immediately. */
+    /** One-tap toggle on the Settings card to switch back to Hybrid Local IP (or restore last custom SIP). */
     private fun toggleLocalSendFromHome() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val enabled = !prefs.getBoolean("local_send_enabled", false)
-        prefs.edit().putBoolean("local_send_enabled", enabled).apply()
-        findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = enabled
-        refreshLocalSendCard()
-        refreshKioskCard()
-        if (enabled) {
-            appendLog("Local Send aktif edildi (Hotspot Zoiper köprüsü)")
-            Toast.makeText(this, "Local Send Aktif (Hotspot SIP: 5060)", Toast.LENGTH_SHORT).show()
+        val currentDecision = resolveRoutingFromPrefs(prefs)
+        val currentlyHybrid = currentDecision.mode == RoutingMode.HYBRID_LOCAL_IP
+        if (!currentlyHybrid) {
+            // Switch from custom SIP back to Hybrid Local IP by clearing custom server
+            prefs.edit()
+                .putString("last_custom_server", currentDecision.customServer)
+                .putString("server", "")
+                .putBoolean("local_send_enabled", true)
+                .apply()
+            findViewById<EditText>(R.id.etCfgServer)?.setText("")
+            findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = true
+            refreshLocalSendCard()
+            refreshKioskCard()
+            appendLog("Hibrit Sabit Yerel IP modu aktif edildi (${currentDecision.pinnedLocalIp}:5060)")
+            Toast.makeText(
+                this,
+                "Hibrit Sabit Yerel IP Aktif (${currentDecision.pinnedLocalIp}:5060)",
+                Toast.LENGTH_SHORT
+            ).show()
             if (running) {
                 startService(Intent(this, GatewayService::class.java).apply {
                     action = GatewayService.ACTION_APPLY_CONFIG
                 })
             } else {
-                val server = prefs.getString("server", "")?.ifEmpty { "0.0.0.0" } ?: "0.0.0.0"
                 val port = prefs.getInt("port", 5060)
                 val user = prefs.getString("user", "")?.ifEmpty { "tswitch" } ?: "tswitch"
                 val pass = prefs.getString("pass", "") ?: ""
-                GatewayService.start(this, server, port, user, pass)
+                GatewayService.start(this, "", port, user, pass)
                 running = true
             }
         } else {
-            appendLog("Local Send kapatıldı")
-            Toast.makeText(this, "Local Send Kapatıldı", Toast.LENGTH_SHORT).show()
-            val server = prefs.getString("server", "") ?: ""
-            val user = prefs.getString("user", "") ?: ""
-            if (server.isNotEmpty() && user.isNotEmpty() && running) {
-                startService(Intent(this, GatewayService::class.java).apply {
-                    action = GatewayService.ACTION_APPLY_CONFIG
-                })
-            } else if (running) {
-                stopGateway()
+            val savedCustom = prefs.getString("last_custom_server", "").orEmpty().trim()
+            val user = prefs.getString("user", "").orEmpty().trim()
+            if (savedCustom.isNotEmpty() && user.isNotEmpty()) {
+                prefs.edit()
+                    .putString("server", savedCustom)
+                    .putBoolean("local_send_enabled", false)
+                    .apply()
+                findViewById<EditText>(R.id.etCfgServer)?.setText(savedCustom)
+                findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = false
+                refreshLocalSendCard()
+                refreshKioskCard()
+                appendLog("Özel SIP sunucusuna geçildi: $savedCustom")
+                Toast.makeText(this, "Özel SIP Aktif: $savedCustom", Toast.LENGTH_SHORT).show()
+                if (running) {
+                    startService(Intent(this, GatewayService::class.java).apply {
+                        action = GatewayService.ACTION_APPLY_CONFIG
+                    })
+                }
+            } else {
+                Toast.makeText(
+                    this,
+                    "Özel SIP sunucusuna geçmek için aşağıya Özel SIP Sunucusu girin",
+                    Toast.LENGTH_LONG
+                ).show()
+                findViewById<EditText>(R.id.etCfgServer)?.requestFocus()
             }
         }
     }
@@ -606,12 +642,14 @@ class MainActivity : AppCompatActivity() {
     private fun refreshLocalSendCard() {
         if (!::tvHomeLocalSendStatus.isInitialized) return
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val enabled = prefs.getBoolean("local_send_enabled", false)
+        val decision = resolveRoutingFromPrefs(prefs)
+        val enabled = decision.mode == RoutingMode.HYBRID_LOCAL_IP
         val hs = HotspotHelper.detectHotspot(this)
         val ip = when {
-            hs.ipAddress != "0.0.0.0" -> hs.ipAddress
             lastServiceLocalIp.isNotEmpty() && lastServiceLocalIp != "0.0.0.0" -> lastServiceLocalIp
-            else -> "192.168.43.1"
+            hs.active && hs.ipAddress != "0.0.0.0" -> hs.ipAddress
+            hs.wifiIpAddress.isNotEmpty() -> hs.wifiIpAddress
+            else -> decision.pinnedLocalIp
         }
         val crit = prefs.getInt("critical_battery_threshold", 15)
         if (enabled) {
@@ -622,24 +660,23 @@ class MainActivity : AppCompatActivity() {
             btnHomeTerminalPing.visibility = View.VISIBLE
             val peerDesc = if (lastLocalPeer.isNotEmpty()) {
                 "Zoiper: $lastLocalPeer"
-            } else if (hs.isActive) {
-                "Hotspot Açık · Zoiper bekleniyor"
+            } else if (hs.active) {
+                "Hotspot Açık · İstemci bekleniyor"
+            } else if (hs.wifiIpAddress.isNotEmpty()) {
+                "WiFi (${hs.wifiIpAddress}) · Sabit: ${decision.pinnedLocalIp}"
             } else {
-                "Hotspot açın ($ip:5060)"
+                "Hotspot/WiFi bekleniyor ($ip:5060)"
             }
             tvHomeLocalSendStatus.text =
                 "SIP: $ip:5060 · $peerDesc · Kanal: 0000 · Kritik: ≤%$crit"
         } else {
-            btnHomeLocalSendToggle.text = "AÇ"
+            btnHomeLocalSendToggle.text = "YEREL'E DÖN"
             btnHomeLocalSendToggle.backgroundTintList =
                 ColorStateList.valueOf(ContextCompat.getColor(this, R.color.accent))
             btnHomeLocalSendToggle.setTextColor(ContextCompat.getColor(this, R.color.accent_on))
             btnHomeTerminalPing.visibility = View.GONE
-            tvHomeLocalSendStatus.text = if (hs.isActive) {
-                "Kapalı · Hotspot hazır (${hs.ipAddress}:5060) — Tek dokunuşla başlatın"
-            } else {
-                "Kapalı — İnternetsiz Hotspot Zoiper SIP & 0000 komut köprüsü"
-            }
+            tvHomeLocalSendStatus.text =
+                "Özel SIP Modu (${decision.customServer}:${decision.customPort}) · PushKit: Yalnızca Uyandırma"
         }
     }
 
@@ -788,26 +825,37 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         val ed = prefs.edit()
         var changed = false
-        var srv = prefs.getString("server", "").orEmpty().trim()
-        val usr = prefs.getString("user", "").orEmpty().trim()
-        if (srv.isEmpty() || srv == "callagent.pro") {
-            srv = "sip.linphone.org"
-            ed.putString("server", srv)
+
+        val rawSrv = prefs.getString("server", "").orEmpty().trim()
+        // Blank, legacy callagent.pro, placeholder 0.0.0.0, or sip.linphone.org stay in HYBRID_LOCAL_IP
+        val normalizedSrv = if (rawSrv.equals("callagent.pro", ignoreCase = true) ||
+            rawSrv.equals("sip.linphone.org", ignoreCase = true) ||
+            rawSrv == "0.0.0.0"
+        ) {
+            ""
+        } else {
+            rawSrv
+        }
+        if (normalizedSrv != rawSrv) {
+            ed.putString("server", normalizedSrv)
             changed = true
         }
-        if (usr.isEmpty() || usr == "tswitch") {
-            ed.putString("user", "t-switch_pusher")
+
+        val pinned = prefs.getString("pinned_local_ip", "").orEmpty().trim()
+        if (pinned.isEmpty()) {
+            ed.putString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP)
             changed = true
         }
-        val pushPass = prefs.getString("push_pusher_pass", "").orEmpty().trim()
-        val curPass = prefs.getString("pass", "").orEmpty().trim()
-        if (srv == "sip.linphone.org" && pushPass.isNotEmpty() && (curPass.isEmpty() || curPass == "1234")) {
-            ed.putString("pass", pushPass)
-            changed = true
-        }
-        if (!prefs.getBoolean("linphone_defaults_migrated", false)) {
-            ed.putBoolean("local_send_enabled", true)
-            ed.putBoolean("linphone_defaults_migrated", true)
+
+        val decision = RoutingPolicy.resolve(
+            customSipServer = normalizedSrv,
+            customSipPort = prefs.getInt("port", 5060),
+            customSipTls = prefs.getBoolean("sip_tls", false),
+            pinnedLocalIp = pinned.ifEmpty { LocalIpPinController.DEFAULT_PINNED_IP }
+        )
+        val shouldBeLocalSend = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        if (prefs.getBoolean("local_send_enabled", !shouldBeLocalSend) != shouldBeLocalSend) {
+            ed.putBoolean("local_send_enabled", shouldBeLocalSend)
             changed = true
         }
         if (changed) ed.apply()
@@ -821,6 +869,11 @@ class MainActivity : AppCompatActivity() {
             savePushFieldsFromUi()
             refreshPushConfigCard()
             refreshHomeDashboard()
+            if (running) {
+                startService(Intent(this, GatewayService::class.java).apply {
+                    action = GatewayService.ACTION_APPLY_CONFIG
+                })
+            }
             Toast.makeText(this, "Linphone PushKit bilgileri kaydedildi", Toast.LENGTH_SHORT).show()
         }
 
@@ -908,10 +961,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun openConfigView() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        findViewById<EditText>(R.id.etCfgServer).setText(prefs.getString("server", "sip.linphone.org"))
+        val decision = resolveRoutingFromPrefs(prefs)
+        val displayServer = if (decision.mode == RoutingMode.HYBRID_LOCAL_IP) "" else decision.customServer
+        findViewById<EditText>(R.id.etCfgServer).setText(displayServer)
         findViewById<EditText>(R.id.etCfgPort).setText(prefs.getInt("port", 5060).toString())
-        findViewById<EditText>(R.id.etCfgUser).setText(prefs.getString("user", "t-switch_pusher"))
+        findViewById<EditText>(R.id.etCfgUser).setText(prefs.getString("user", ""))
         findViewById<EditText>(R.id.etCfgPass).setText(prefs.getString("pass", ""))
+        findViewById<EditText>(R.id.etCfgPinnedIp)?.setText(decision.pinnedLocalIp)
         buildOwnNumberFields(prefs)
 
         findViewById<CheckBox>(R.id.cbCfgPushEnabled)?.isChecked =
@@ -950,9 +1006,9 @@ class MainActivity : AppCompatActivity() {
             GatewayApp.applyThemeMode(mode)
         }
 
-        // Local Send & Virtual Command Terminal settings
+        // Local Send & Virtual Command Terminal settings (synced from RoutingPolicy)
         findViewById<CheckBox>(R.id.cbCfgLocalSend).isChecked =
-            prefs.getBoolean("local_send_enabled", false)
+            decision.mode == RoutingMode.HYBRID_LOCAL_IP
         findViewById<EditText>(R.id.etCfgCritBattery).setText(
             prefs.getInt("critical_battery_threshold", 15).toString()
         )
@@ -1167,10 +1223,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveConfigFromView() {
-        val server = findViewById<EditText>(R.id.etCfgServer).text.toString().trim()
+        // Save PushKit fields BEFORE reading etCfgPass so any synced password is never overwritten.
+        savePushFieldsFromUi()
+        refreshPushConfigCard()
+
+        val rawServer = findViewById<EditText>(R.id.etCfgServer).text.toString().trim()
         val port = findViewById<EditText>(R.id.etCfgPort).text.toString().trim().toIntOrNull() ?: 5060
         val user = findViewById<EditText>(R.id.etCfgUser).text.toString().trim()
         val pass = findViewById<EditText>(R.id.etCfgPass).text.toString().trim()
+        val pinnedIpInput = findViewById<EditText>(R.id.etCfgPinnedIp)?.text?.toString()?.trim().orEmpty()
         // The lowest active SIM's number is the one everything that does not
         // know which SIM it is dealing with will use.
         val own = ownNumberFields.firstOrNull()?.second?.text?.toString()?.trim().orEmpty()
@@ -1193,26 +1254,34 @@ class MainActivity : AppCompatActivity() {
             R.id.rbThemeDark -> "dark"
             else -> "system"
         }
-        val localSend = findViewById<CheckBox>(R.id.cbCfgLocalSend).isChecked
         val critBattery = findViewById<EditText>(R.id.etCfgCritBattery)
             .text.toString().trim().toIntOrNull()?.coerceIn(1, 95) ?: 15
         val customCmds = findViewById<EditText>(R.id.etCfgCustomCmds).text.toString().trim()
-        savePushFieldsFromUi()
-        refreshPushConfigCard()
 
-        if (!localSend && (server.isEmpty() || user.isEmpty())) {
+        val decision = RoutingPolicy.resolve(
+            customSipServer = if (rawServer == "0.0.0.0") "" else rawServer,
+            customSipPort = port,
+            customSipTls = tls,
+            pinnedLocalIp = pinnedIpInput
+        )
+        val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        val storedServer = if (isHybrid) "" else decision.customServer
+        findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = isHybrid
+
+        if (!isHybrid && (storedServer.isEmpty() || user.isEmpty())) {
             Toast.makeText(
                 this,
-                "SIP Sunucu ve kullanıcı adı gerekli (veya Local Send'i aktif edin)",
+                "Özel SIP sunucusu için kullanıcı adı gerekli (veya Sabit Yerel IP için sunucuyu boş bırakın)",
                 Toast.LENGTH_LONG
             ).show()
             return
         }
         getSharedPreferences("gateway", MODE_PRIVATE).edit()
-            .putString("server", server)
-            .putInt("port", port)
+            .putString("server", storedServer)
+            .putInt("port", decision.customPort)
             .putString("user", user)
             .putString("pass", pass)
+            .putString("pinned_local_ip", decision.pinnedLocalIp)
             .putString("own_number", own)
             .also { ed ->
                 ownNumberFields.forEach { (slot, et) ->
@@ -1223,24 +1292,25 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("use_stun", useStun)
             .putBoolean("translit_ascii", translit)
             .putBoolean("call_monitor", callMonitor)
-            .putBoolean("sip_tls", tls)
+            .putBoolean("sip_tls", if (isHybrid) tls else decision.customUseTls)
             .putBoolean("srtp_enabled", srtp)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)
             .putString("theme_mode", themeMode)
-            .putBoolean("local_send_enabled", localSend)
+            .putBoolean("local_send_enabled", isHybrid)
             .putInt("critical_battery_threshold", critBattery)
             .putString("custom_commands", customCmds)
             .apply()
         GatewayApp.applyThemeMode(themeMode)
         refreshLocalSendCard()
         appendLog(
-            "Config saved: ${user.ifEmpty { "tswitch" }}@${server.ifEmpty { "localsend" }}:$port " +
-                "(localSend=${if (localSend) "on" else "off"}, critBat=$critBattery%, " +
+            "Config saved: mode=${decision.mode} pinned=${decision.pinnedLocalIp} " +
+                "custom=${storedServer.ifEmpty { "none" }}:${decision.customPort} " +
+                "(user=${user.ifEmpty { "tswitch" }}, critBat=$critBattery%, " +
                 "theme=$themeMode, own=${own.ifEmpty { "auto" }}, " +
                 "codec=$codec, stun=${if (useStun) "on" else "off"}, " +
-                "tls=${if (tls) "on" else "off"}, " +
-                "srtp=${if (srtp && tls) "on" else "off"}, " +
+                "tls=${if (!isHybrid && decision.customUseTls) "on" else "off"}, " +
+                "srtp=${if (!isHybrid && srtp && decision.customUseTls) "on" else "off"}, " +
                 "ascii=${if (translit) "on" else "off"}, " +
                 "monitor=${if (callMonitor) "on" else "off"}, " +
                 "agent volume ${if (agentVolStep > 0) "+$agentVolStep" else "$agentVolStep"})"
@@ -1256,9 +1326,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             GatewayService.start(
                 this,
-                if (localSend && server.isEmpty()) "0.0.0.0" else server,
-                port,
-                if (localSend && user.isEmpty()) "tswitch" else user,
+                storedServer,
+                decision.customPort,
+                if (isHybrid && user.isEmpty()) "tswitch" else user,
                 pass
             )
             running = true
@@ -1290,7 +1360,8 @@ class MainActivity : AppCompatActivity() {
         if (!::homeCallCard.isInitialized) return
 
         val cfg = getSharedPreferences("gateway", MODE_PRIVATE)
-        val localSendOn = cfg.getBoolean("local_send_enabled", false)
+        val decision = resolveRoutingFromPrefs(cfg)
+        val localSendOn = decision.mode == RoutingMode.HYBRID_LOCAL_IP
         // "Online" means registered (or listening in Local Send mode), not merely
         // running: while connecting or retrying the gateway cannot take a call,
         // and the pill should say so — it is also the tap target for a manual retry.
@@ -1317,7 +1388,9 @@ class MainActivity : AppCompatActivity() {
         tvHomeStatusPill.contentDescription =
             when { online -> "Online"; connecting -> "Connecting"; else -> "Offline" }
 
-        val tlsOn = cfg.getBoolean("sip_tls", false)
+        // Only show TLS/SRTP badges when active SIP mode actually uses TLS/SRTP
+        // (not in HYBRID_LOCAL_IP local UDP mode).
+        val tlsOn = !localSendOn && decision.customUseTls
         tvHomeTlsBadge.visibility = if (tlsOn) View.VISIBLE else View.GONE
 
         tvHomeSrtpBadge.visibility =
@@ -1332,11 +1405,7 @@ class MainActivity : AppCompatActivity() {
             val dest = getSharedPreferences("gateway", MODE_PRIVATE)
                 .getString("own_number", "") ?: ""
             tvHomeCallTo.text = if (dest.isNotEmpty()) "Connected to $dest" else "Connected"
-            // Inbound is the normal direction for a gateway; a dialler-initiated
-            // call is the other way round.
-            tvHomeCallDirection.text =
-                if (com.callagent.gateway.gsm.GsmCallManager.activeCallState ==
-                    android.telecom.Call.STATE_ACTIVE && gsmCallActive) "GSM → SIP" else "GSM → SIP"
+            tvHomeCallDirection.text = if (currentCallIncoming) "GSM → SIP" else "SIP → GSM"
             startCallTimer()
         } else {
             homeCallCard.visibility = View.GONE
@@ -1381,12 +1450,14 @@ class MainActivity : AppCompatActivity() {
         val tvSync = findViewById<TextView>(R.id.tvDashSyncBadge)
 
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
-        val localSend = prefs.getBoolean("local_send_enabled", false)
+        val decision = resolveRoutingFromPrefs(prefs)
+        val localSend = decision.mode == RoutingMode.HYBRID_LOCAL_IP
         val hs = HotspotHelper.detectHotspot(this)
         val ip = when {
-            hs.ipAddress != "0.0.0.0" -> hs.ipAddress
             lastServiceLocalIp.isNotEmpty() && lastServiceLocalIp != "0.0.0.0" -> lastServiceLocalIp
-            else -> "tswitch.local"
+            hs.active && hs.ipAddress != "0.0.0.0" -> hs.ipAddress
+            hs.wifiIpAddress.isNotEmpty() -> hs.wifiIpAddress
+            else -> decision.pinnedLocalIp
         }
 
         tvSip.text = if (localSend) {
@@ -1395,12 +1466,10 @@ class MainActivity : AppCompatActivity() {
                 hs.connectedClients.isNotEmpty() -> "İstemci: ${hs.connectedClients.first()} · Kayıt bekliyor"
                 else -> "Dinleniyor ($ip:5060)"
             }
-            "SIP / Local Send: tswitch.local:5060 · $peerInfo"
+            "SIP / Hibrit Yerel: $ip:5060 · $peerInfo"
         } else {
-            val srv = prefs.getString("server", "sip.linphone.org").orEmpty()
-            val usr = prefs.getString("user", "t-switch_pusher").orEmpty()
-            val prt = prefs.getInt("port", 5060)
-            "SIP Sunucu: $usr@$srv:$prt · ${if (gatewayOnline) "Kayıtlı ✅" else "Bağlanıyor…"}"
+            val usr = prefs.getString("user", "").orEmpty()
+            "Özel SIP: $usr@${decision.customServer}:${decision.customPort} · ${if (gatewayOnline) "Kayıtlı ✅" else "Bağlanıyor…"}"
         }
 
         tvPush?.text = "PushKit: ${com.callagent.gateway.localsend.PushWakeController.dashboardSummary(this)}"
@@ -1411,7 +1480,7 @@ class MainActivity : AppCompatActivity() {
             ?: tm?.voiceNetworkType
             ?: TelephonyManager.NETWORK_TYPE_UNKNOWN
         val netLabel = networkTypeName(rawNetType).takeIf { it != "Unknown" } ?: "GSM"
-        val dbm = signalDbm(tm?.signalStrength, tm)
+        val dbm = signalDbm(safeSignalStrength(tm), tm)
         val dbmStr = if (dbm != null && dbm != Int.MAX_VALUE) " ${dbm}dBm" else ""
         val simNum = prefs.getString("own_number_slot_0", "").orEmpty()
             .ifEmpty { prefs.getString("own_number", "").orEmpty() }
@@ -1517,7 +1586,7 @@ class MainActivity : AppCompatActivity() {
                 android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN -> "GSM"
                 else -> "GSM"
             }
-            val dbm = signalDbm(tm.signalStrength, tm)
+            val dbm = signalDbm(safeSignalStrength(tm), tm)
             if (dbm != null && dbm != Int.MAX_VALUE) "$type $name ${dbm}dBm"
             else "$type $name"
         } catch (e: Exception) {
@@ -1530,21 +1599,17 @@ class MainActivity : AppCompatActivity() {
             val caps = cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
             val onWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             val hs = HotspotHelper.detectHotspot(this)
-            val localSendOn = getSharedPreferences("gateway", MODE_PRIVATE)
-                .getBoolean("local_send_enabled", false)
+            val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
+            val decision = resolveRoutingFromPrefs(prefs)
+            val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
             @Suppress("DEPRECATION")
             val info = wm.connectionInfo
             when {
-                hs.isActive -> {
-                    val peerTag = if (lastLocalPeer.isNotEmpty()) "Bağlı" else "tswitch.local"
+                hs.active -> {
+                    val peerTag = if (lastLocalPeer.isNotEmpty()) "Bağlı" else decision.pinnedLocalIp
                     "Hotspot ${hs.ipAddress} · $peerTag"
                 }
-                !wm.isWifiEnabled || !onWifi -> {
-                    if (localSendOn) "tswitch.local:5060 · Yerel"
-                    else if (!wm.isWifiEnabled) "WiFi Kapalı"
-                    else "WiFi Bağlı Değil"
-                }
-                else -> {
+                hs.wifiIpAddress.isNotEmpty() || (wm.isWifiEnabled && onWifi) -> {
                     @Suppress("DEPRECATION")
                     val raw = info?.ssid?.trim('"').orEmpty()
                     val ssid =
@@ -1556,8 +1621,18 @@ class MainActivity : AppCompatActivity() {
                     @Suppress("DEPRECATION")
                     val rssi = info?.rssi ?: 0
                     val band = if (freq > 4000) "5G" else "2.4G"
-                    if (speed > 0) "$ssid $band ${speed}Mbps ${rssi}dBm"
+                    val ipTag = if (isHybrid) decision.pinnedLocalIp else hs.wifiIpAddress
+                    if (ipTag.isNotEmpty()) "$ssid $band ${rssi}dBm · $ipTag"
+                    else if (speed > 0) "$ssid $band ${speed}Mbps ${rssi}dBm"
                     else "$ssid $band ${rssi}dBm"
+                }
+                !wm.isWifiEnabled -> {
+                    if (isHybrid) "${decision.pinnedLocalIp}:5060 · Yerel"
+                    else "WiFi Kapalı"
+                }
+                else -> {
+                    if (isHybrid) "${decision.pinnedLocalIp}:5060 · Yerel"
+                    else "WiFi Bağlı Değil"
                 }
             }
         } catch (e: Exception) {
@@ -1733,14 +1808,14 @@ class MainActivity : AppCompatActivity() {
             appendLine("Data network : ${networkTypeName(tm.dataNetworkType)}")
             appendLine("Voice network: ${networkTypeName(tm.voiceNetworkType)}")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                tm.signalStrength?.cellSignalStrengths?.forEachIndexed { i, c ->
+                safeSignalStrength(tm)?.cellSignalStrengths?.forEachIndexed { i, c ->
                     appendLine(
                         "Signal[$i]    : ${c.dbm} dBm, level ${c.level}/4 " +
                             "(${c.javaClass.simpleName.removePrefix("CellSignalStrength")})"
                     )
                 }
             } else {
-                signalDbm(tm.signalStrength)?.let { appendLine("Signal       : $it dBm") }
+                signalDbm(safeSignalStrength(tm), tm)?.let { appendLine("Signal       : $it dBm") }
             }
         } catch (e: Exception) {
             appendLine("telephony: ${e.message}")
@@ -1835,9 +1910,14 @@ class MainActivity : AppCompatActivity() {
                 row("PCI", num(id.pci))
                 row("TAC", num(id.tac))
                 row("EARFCN", num(id.earfcn))
-                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
-                id.operatorAlphaLong?.toString()?.takeIf { it.isNotBlank() }
-                    ?.let { row("Carrier", it) }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                    id.operatorAlphaLong?.toString()?.takeIf { it.isNotBlank() }
+                        ?.let { row("Carrier", it) }
+                } else {
+                    @Suppress("DEPRECATION")
+                    row("MCC/MNC", "${num(id.mcc)}/${num(id.mnc)}")
+                }
                 row("Signal", sig(info.cellSignalStrength))
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
@@ -1858,7 +1938,12 @@ class MainActivity : AppCompatActivity() {
                 row("LAC", num(id.lac))
                 row("PSC", num(id.psc))
                 row("UARFCN", num(id.uarfcn))
-                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                } else {
+                    @Suppress("DEPRECATION")
+                    row("MCC/MNC", "${num(id.mcc)}/${num(id.mnc)}")
+                }
                 row("Signal", sig(info.cellSignalStrength))
             }
             info is android.telephony.CellInfoGsm -> {
@@ -1868,7 +1953,12 @@ class MainActivity : AppCompatActivity() {
                 row("LAC", num(id.lac))
                 row("ARFCN", num(id.arfcn))
                 row("BSIC", num(id.bsic))
-                row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    row("MCC/MNC", "${id.mccString ?: "—"}/${id.mncString ?: "—"}")
+                } else {
+                    @Suppress("DEPRECATION")
+                    row("MCC/MNC", "${num(id.mcc)}/${num(id.mnc)}")
+                }
                 row("Signal", sig(info.cellSignalStrength))
             }
             else -> {
@@ -2166,7 +2256,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<EditText>(R.id.etContactsSearch)?.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                loadContactsList(s?.toString().orEmpty())
+                val query = s?.toString().orEmpty()
+                pendingContactsSearch?.let { contactsSearchHandler.removeCallbacks(it) }
+                val task = Runnable { loadContactsList(query) }
+                pendingContactsSearch = task
+                contactsSearchHandler.postDelayed(task, 200L)
             }
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
@@ -2222,7 +2316,11 @@ class MainActivity : AppCompatActivity() {
                         subId = subId
                     )
                     com.callagent.gateway.sms.SmsOutbox.add(this, sms)
-                    val sent = com.callagent.gateway.sms.SmsSender.dispatch(this, sms)
+                    val sent = if (com.callagent.gateway.sms.SmsOutbox.claimForDispatch(this, sms.id)) {
+                        com.callagent.gateway.sms.SmsSender.dispatch(this, sms)
+                    } else {
+                        false
+                    }
                     runCatching {
                         CallLogStore.addEntry(
                             this,
@@ -2555,16 +2653,31 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnLocalReject)?.setOnClickListener {
             val call = com.callagent.gateway.gsm.GsmCallManager.localFallbackCall
-            com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
-            if (call != null) com.callagent.gateway.gsm.GsmCallManager.rejectCall(call)
+            if (call != null) {
+                com.callagent.gateway.gsm.GsmCallManager.stopFallbackRingtone()
+                com.callagent.gateway.gsm.GsmCallManager.rejectCall(call)
+                if (call.state == android.telecom.Call.STATE_DISCONNECTED) {
+                    com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
+                }
+            } else {
+                com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
+            }
             showLocalFallbackDialogIfNeeded()
         }
 
         findViewById<Button>(R.id.btnLocalHangup)?.setOnClickListener {
             val call = com.callagent.gateway.gsm.GsmCallManager.localFallbackCall
                 ?: com.callagent.gateway.gsm.GsmCallManager.activeCall
-            com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
-            if (call != null) com.callagent.gateway.gsm.GsmCallManager.hangupCall(call)
+            if (call != null) {
+                com.callagent.gateway.gsm.GsmCallManager.hangupCall(call)
+                if (call !== com.callagent.gateway.gsm.GsmCallManager.localFallbackCall ||
+                    call.state == android.telecom.Call.STATE_DISCONNECTED
+                ) {
+                    com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
+                }
+            } else {
+                com.callagent.gateway.gsm.GsmCallManager.clearLocalFallback(restoreScreenIfKiosk = true)
+            }
             showLocalFallbackDialogIfNeeded()
         }
 
@@ -2657,12 +2770,14 @@ class MainActivity : AppCompatActivity() {
         val state = call?.state ?: android.telecom.Call.STATE_DIALING
         val isRinging = state == android.telecom.Call.STATE_RINGING
         val isActive = state == android.telecom.Call.STATE_ACTIVE
+        val isHolding = state == android.telecom.Call.STATE_HOLDING
 
         localView.visibility = View.VISIBLE
         localView.bringToFront()
         findViewById<TextView>(R.id.tvLocalCallBadge)?.text = when {
             isRinging -> "GELEN ARAMA · GM 8"
             isActive -> "GÖRÜŞME AKTİF · GM 8"
+            isHolding -> "BEKLETİLİYOR · GM 8"
             else -> "ARANIYOR · GM 8"
         }
         findViewById<TextView>(R.id.tvLocalCallName)?.text = contactName ?: number
@@ -2674,14 +2789,21 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnLocalHangup)?.visibility = if (isRinging) View.GONE else View.VISIBLE
 
         val tvTimer = findViewById<TextView>(R.id.tvLocalCallTimer)
-        if (isActive) {
-            if (localCallStartTimeMs == 0L) localCallStartTimeMs = System.currentTimeMillis()
-            localTimerHandler.removeCallbacks(localTimerRunnable)
-            localTimerRunnable.run()
-        } else {
-            localCallStartTimeMs = 0L
-            localTimerHandler.removeCallbacks(localTimerRunnable)
-            tvTimer?.text = if (isRinging) "Çalıyor…" else "Bağlanıyor…"
+        when {
+            isActive -> {
+                if (localCallStartTimeMs == 0L) localCallStartTimeMs = System.currentTimeMillis()
+                localTimerHandler.removeCallbacks(localTimerRunnable)
+                localTimerRunnable.run()
+            }
+            isHolding -> {
+                localTimerHandler.removeCallbacks(localTimerRunnable)
+                tvTimer?.text = "Bekletiliyor"
+            }
+            else -> {
+                localCallStartTimeMs = 0L
+                localTimerHandler.removeCallbacks(localTimerRunnable)
+                tvTimer?.text = if (isRinging) "Çalıyor…" else "Bağlanıyor…"
+            }
         }
 
         updateLocalInCallControls()
@@ -2703,7 +2825,7 @@ class MainActivity : AppCompatActivity() {
         // NOT_EXPORTED: the service sends these with setPackage(), so nothing
         // outside the app has any business delivering them — exported, any
         // installed app could feed the UI fabricated status and log lines.
-        registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Replay any log messages buffered while activity was paused
         // Re-render from the service's buffer rather than consuming it: the
@@ -2714,11 +2836,6 @@ class MainActivity : AppCompatActivity() {
         if (buffered.isNotEmpty()) {
             tvLog.text = buffered.joinToString("\n", postfix = "\n")
             svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
-        }
-
-        if (onlineSince > 0) {
-            uptimeHandler.removeCallbacks(uptimeRunnable)
-            uptimeRunnable.run()
         }
 
         // The old full-screen in-call view is superseded by the live call
@@ -2761,9 +2878,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        uptimeHandler.removeCallbacks(uptimeRunnable)
         callTimerHandler.removeCallbacks(callTimerRunnable)
         callTimerHandler.removeCallbacks(gsmPollRunnable)
+        localTimerHandler.removeCallbacks(localTimerRunnable)
+        contactsSearchHandler.removeCallbacksAndMessages(null)
+        pendingContactsSearch = null
         netHandler.removeCallbacks(netRunnable)
         netHandler.removeCallbacks(coalescedLogUiRefresh)
         logUiRefreshPending = false
@@ -2771,6 +2890,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        com.callagent.gateway.gsm.GsmCallManager.onLocalFallbackStateChanged = null
+        localTimerHandler.removeCallbacksAndMessages(null)
+        contactsSearchHandler.removeCallbacksAndMessages(null)
         contactsObserver?.let { obs ->
             runCatching { contentResolver.unregisterContentObserver(obs) }
         }
