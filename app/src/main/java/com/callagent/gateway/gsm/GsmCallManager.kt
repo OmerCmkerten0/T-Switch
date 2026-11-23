@@ -96,6 +96,20 @@ object GsmCallManager {
     fun shouldAutoSleepAfterLocalCall(direction: String, hasActiveOrRingingCall: Boolean): Boolean =
         direction.equals("IN", ignoreCase = true) && !hasActiveOrRingingCall
 
+    /**
+     * Pure event-forwarding guard: non-RINGING lifecycle callbacks (`onGsmCallActive`,
+     * `onGsmCallStateChanged`, `onGsmCallEnded`) must ONLY be forwarded to [listener]
+     * when the event belongs to a tracked call (`activeCall` or `localFallbackCall`),
+     * or when no `activeCall` is currently tracked — never for a rejected 2nd incoming
+     * call-waiting call whose `STATE_DISCONNECTING`/`STATE_DISCONNECTED` would otherwise
+     * cause `CallOrchestrator` to tear down the live primary call.
+     */
+    fun shouldForwardCallEventToListener(
+        hasActiveCall: Boolean,
+        matchesActiveCall: Boolean,
+        matchesLocalFallback: Boolean
+    ): Boolean = !hasActiveCall || matchesActiveCall || matchesLocalFallback
+
     @Volatile var listener: Listener? = null
 
     /** Optional callback for routing important audio diagnostics to the
@@ -195,6 +209,11 @@ object GsmCallManager {
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active: $number")
+                val forwardToListener = shouldForwardCallEventToListener(
+                    hasActiveCall = activeCall != null,
+                    matchesActiveCall = activeCall === call,
+                    matchesLocalFallback = localFallbackCall === call
+                )
                 if (localFallbackCall === call) {
                     if (localCallConnectedAtMs == 0L) localCallConnectedAtMs = System.currentTimeMillis()
                     stopFallbackRingtone()
@@ -205,7 +224,9 @@ object GsmCallManager {
                 } else if (activeCall === call) {
                     configureAudioBridge()
                 }
-                listener?.onGsmCallActive(call)
+                if (forwardToListener) {
+                    listener?.onGsmCallActive(call)
+                }
             }
         }
     }
@@ -262,7 +283,10 @@ object GsmCallManager {
 
     fun onCallRemoved(call: Call) {
         Log.i(TAG, "GSM call removed")
-        if (localFallbackCall === call) {
+        val wasLocalFallback = localFallbackCall === call
+        val hadActiveCall = activeCall != null
+        val matchesActive = activeCall === call
+        if (wasLocalFallback) {
             val num = callerOf(call).first
             val durSec = if (localCallConnectedAtMs > 0L) {
                 ((System.currentTimeMillis() - localCallConnectedAtMs) / 1000L).coerceAtLeast(1L)
@@ -285,7 +309,6 @@ object GsmCallManager {
             appLog("CALL: GM 8 yerel görüşme tamamlandı ($num, ${durSec}s)")
             clearLocalFallback(restoreScreenIfKiosk = true)
         }
-        val matchesActive = activeCall === call
         if (shouldRestoreAudioOnRemove(matchesActive)) {
             activeCall = null
             activeCallState = Call.STATE_DISCONNECTED
@@ -293,10 +316,13 @@ object GsmCallManager {
         } else {
             Log.i(TAG, "Removed GSM call is not activeCall — preserving activeCall and audio bridge")
         }
-        notifyCallEnded(call)
+        if (shouldForwardCallEventToListener(hadActiveCall, matchesActive, wasLocalFallback)) {
+            notifyCallEnded(call)
+        }
     }
 
     fun onCallStateChanged(call: Call, state: Int) {
+        val wasLocalFallback = localFallbackCall === call
         if (activeCall === call) {
             activeCallState = state
         }
@@ -338,6 +364,11 @@ object GsmCallManager {
             }
             Call.STATE_ACTIVE -> {
                 Log.i(TAG, "GSM call active")
+                val forwardToListener = shouldForwardCallEventToListener(
+                    hasActiveCall = activeCall != null,
+                    matchesActiveCall = activeCall === call,
+                    matchesLocalFallback = localFallbackCall === call
+                )
                 if (localFallbackCall === call) {
                     if (localCallConnectedAtMs == 0L) localCallConnectedAtMs = System.currentTimeMillis()
                     stopFallbackRingtone()
@@ -349,11 +380,17 @@ object GsmCallManager {
                 } else if (activeCall === call) {
                     configureAudioBridge()
                 }
-                listener?.onGsmCallActive(call)
+                if (forwardToListener) {
+                    listener?.onGsmCallActive(call)
+                }
             }
             Call.STATE_DISCONNECTED -> {
-                val isTracked = (activeCall === call || activeCall == null)
-                if (isTracked) {
+                val forwardToListener = shouldForwardCallEventToListener(
+                    hasActiveCall = activeCall != null,
+                    matchesActiveCall = activeCall === call,
+                    matchesLocalFallback = localFallbackCall === call
+                )
+                if (forwardToListener) {
                     lastDisconnectCause = try {
                         call.details?.disconnectCause
                     } catch (e: Exception) {
@@ -361,16 +398,23 @@ object GsmCallManager {
                         null
                     }
                     Log.i(TAG, "GSM call disconnected (cause=${lastDisconnectCause?.code})")
+                    notifyCallEnded(call)
+                    if (activeCall === call) {
+                        activeCallState = Call.STATE_DISCONNECTED
+                    }
                 } else {
                     Log.i(TAG, "Secondary GSM call disconnected — preserving activeCall state")
                 }
-                notifyCallEnded(call)
-                if (activeCall === call) {
-                    activeCallState = Call.STATE_DISCONNECTED
-                }
             }
         }
-        listener?.onGsmCallStateChanged(call, state)
+        val forwardStateChange = shouldForwardCallEventToListener(
+            hasActiveCall = activeCall != null,
+            matchesActiveCall = activeCall === call,
+            matchesLocalFallback = wasLocalFallback || localFallbackCall === call
+        )
+        if (forwardStateChange) {
+            listener?.onGsmCallStateChanged(call, state)
+        }
     }
 
     // ── Call control ────────────────────────────────────

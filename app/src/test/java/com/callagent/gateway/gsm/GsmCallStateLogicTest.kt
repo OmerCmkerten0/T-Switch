@@ -30,4 +30,40 @@ class GsmCallStateLogicTest {
         assertFalse(GsmCallManager.shouldAutoSleepAfterLocalCall("IN", true))
         assertFalse(GsmCallManager.shouldAutoSleepAfterLocalCall("OUT", true))
     }
+
+    @Test
+    fun rejectedSecondCallLifecycleEventsAreNotForwardedToListener() {
+        // Rejected 2nd incoming call while a primary call is active: must NOT forward
+        assertFalse(
+            GsmCallManager.shouldForwardCallEventToListener(
+                hasActiveCall = true,
+                matchesActiveCall = false,
+                matchesLocalFallback = false
+            )
+        )
+        // Primary active call events MUST forward
+        assertTrue(
+            GsmCallManager.shouldForwardCallEventToListener(
+                hasActiveCall = true,
+                matchesActiveCall = true,
+                matchesLocalFallback = false
+            )
+        )
+        // Local fallback call events MUST forward even if activeCall differs
+        assertTrue(
+            GsmCallManager.shouldForwardCallEventToListener(
+                hasActiveCall = true,
+                matchesActiveCall = false,
+                matchesLocalFallback = true
+            )
+        )
+        // When no activeCall is tracked, events MUST forward
+        assertTrue(
+            GsmCallManager.shouldForwardCallEventToListener(
+                hasActiveCall = false,
+                matchesActiveCall = false,
+                matchesLocalFallback = false
+            )
+        )
+    }
 }
