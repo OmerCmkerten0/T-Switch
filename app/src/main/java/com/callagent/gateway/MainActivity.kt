@@ -1365,7 +1365,7 @@ class MainActivity : AppCompatActivity() {
 
         // Only show TLS/SRTP badges when active SIP mode actually uses TLS/SRTP
         // (not in HYBRID_LOCAL_IP local UDP mode).
-        val tlsOn = !localSendOn && decision.customUseTls
+        val tlsOn = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE || (!localSendOn && decision.customUseTls)
         tvHomeTlsBadge.visibility = if (tlsOn) View.VISIBLE else View.GONE
 
         tvHomeSrtpBadge.visibility =
@@ -1435,16 +1435,26 @@ class MainActivity : AppCompatActivity() {
             else -> decision.pinnedLocalIp
         }
 
-        tvSip.text = if (localSend) {
-            val peerInfo = when {
-                lastLocalPeer.isNotEmpty() -> "Bağlı: $lastLocalPeer ✅"
-                hs.connectedClients.isNotEmpty() -> "İstemci: ${hs.connectedClients.first()} · Kayıt bekliyor"
-                else -> "Dinleniyor ($ip:5060)"
+        tvSip.text = when (decision.mode) {
+            RoutingMode.HYBRID_LOCAL_IP -> {
+                val peerInfo = when {
+                    lastLocalPeer.isNotEmpty() -> "Bağlı: $lastLocalPeer ✅"
+                    hs.connectedClients.isNotEmpty() -> "İstemci: ${hs.connectedClients.first()} · Kayıt bekliyor"
+                    else -> "Dinleniyor ($ip:5060)"
+                }
+                "SIP / Hibrit Yerel: $ip:5060 · $peerInfo"
             }
-            "SIP / Hibrit Yerel: $ip:5060 · $peerInfo"
-        } else {
-            val usr = prefs.getString("user", "").orEmpty()
-            "Özel SIP: $usr@${decision.customServer}:${decision.customPort} · ${if (gatewayOnline) "Kayıtlı ✅" else "Bağlanıyor…"}"
+            RoutingMode.CLOUD_ONLY_LINPHONE -> {
+                val pushDomain = prefs.getString("push_domain", "sip.linphone.org")
+                    .orEmpty().trim().ifEmpty { "sip.linphone.org" }
+                val pushUser = prefs.getString("push_pusher_user", "").orEmpty().trim()
+                    .ifEmpty { prefs.getString("user", "").orEmpty().trim() }
+                "Bulut SIP (Tek Hesap): $pushUser@$pushDomain:5061 · ${if (gatewayOnline) "Kayıtlı ✅" else "Bağlanıyor…"}"
+            }
+            RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE -> {
+                val usr = prefs.getString("user", "").orEmpty()
+                "Özel SIP: $usr@${decision.customServer}:${decision.customPort} · ${if (gatewayOnline) "Kayıtlı ✅" else "Bağlanıyor…"}"
+            }
         }
 
         tvPush?.text = "PushKit: ${com.callagent.gateway.localsend.PushWakeController.dashboardSummary(this)}"

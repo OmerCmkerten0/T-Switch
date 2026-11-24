@@ -345,11 +345,17 @@ class SipClient(
     private fun receiveLoop() {
         while (running.get()) {
             try {
-                val t = transport ?: break
+                val t = transport
+                if (t == null || !t.isOpen) {
+                    Thread.sleep(200)
+                    continue
+                }
                 val (data, address) = t.receive() ?: continue
                 handlePacket(data, address)
             } catch (_: SocketTimeoutException) {
                 // normal
+            } catch (_: InterruptedException) {
+                if (!running.get()) break
             } catch (e: Exception) {
                 if (!running.get()) break
                 uiLog("Receive error: ${e.message}")
