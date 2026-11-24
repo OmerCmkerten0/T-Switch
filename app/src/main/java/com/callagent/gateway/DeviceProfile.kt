@@ -1089,6 +1089,10 @@ data class DeviceProfile(
                 append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC4 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'DEC2 Volume' 0 2>/dev/null; ")
@@ -1102,7 +1106,9 @@ data class DeviceProfile(
                 append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 1 2>/dev/null; ")
                 // In-call capture: downlink only (caller voice), disable uplink echo
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
-                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null")
+                append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
             },
             mixerRestoreCmd = buildString {
                 append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
@@ -1118,8 +1124,14 @@ data class DeviceProfile(
                 append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ADC1' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ADC2' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC4 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 MUX' 'DEC1' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 Volume' 84 2>/dev/null; ")
                 append("tinymix 'ADC2 MUX' 'INP3' 2>/dev/null; ")
                 append("tinymix 'DEC1 Volume' 84 2>/dev/null; ")
                 append("tinymix 'DEC2 Volume' 84 2>/dev/null; ")
@@ -1143,6 +1155,10 @@ data class DeviceProfile(
                 append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC4 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'DEC2 Volume' 0 2>/dev/null; ")
@@ -1164,6 +1180,10 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'DEC4 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 MUX' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'IIR1 INP1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'DEC2 Volume' 0 2>/dev/null; ")
@@ -1176,6 +1196,8 @@ data class DeviceProfile(
                 append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
+                append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("echo -n 'DEC1='; tinymix 'DEC1 MUX' 2>&1; ")
                 append("echo -n 'DEC2='; tinymix 'DEC2 MUX' 2>&1; ")
                 append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
@@ -1191,6 +1213,7 @@ data class DeviceProfile(
                 append("echo -n 'VOC_DL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
                 append("echo -n 'VOC_UL='; tinymix 'MultiMedia1 Mixer VOC_REC_UL' 2>&1")
             },
+            halCallActiveVsids = listOf("10c01000", "10dc1000", "11c05000", "11dc5000"),
             musicVolPercent = 90,
             captureGain = 3,
             playbackGain = 2,
