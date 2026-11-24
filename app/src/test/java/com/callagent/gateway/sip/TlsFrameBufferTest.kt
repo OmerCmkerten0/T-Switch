@@ -104,4 +104,38 @@ class TlsFrameBufferTest {
         assertEquals(sipMsg, buffer.takeMessage())
         assertNull(buffer.takeMessage())
     }
+
+    @Test
+    fun deflateCompressedLinphoneCpimBodyIsInflatedCleanly() {
+        val cpim = "From: <sip:t-switch_receiver@sip.linphone.org>\r\n" +
+            "To: <sip:t-switch_pusher@sip.linphone.org>\r\n" +
+            "\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "\r\n" +
+            "!ara Çağrı Şahin"
+        val deflater = java.util.zip.Deflater()
+        val rawCpim = cpim.toByteArray(Charsets.UTF_8)
+        deflater.setInput(rawCpim)
+        deflater.finish()
+        val out = java.io.ByteArrayOutputStream()
+        val tmp = ByteArray(256)
+        while (!deflater.finished()) {
+            val n = deflater.deflate(tmp)
+            if (n > 0) out.write(tmp, 0, n)
+        }
+        deflater.end()
+        val compressed = out.toByteArray()
+
+        val headers = "MESSAGE sip:t-switch_pusher@sip.linphone.org SIP/2.0\r\n" +
+            "Content-Type: message/cpim\r\n" +
+            "Content-Encoding: deflate\r\n" +
+            "Content-Length: ${compressed.size}"
+        val wire = (headers + "\r\n\r\n").toByteArray(Charsets.UTF_8) + compressed
+
+        val buffer = TlsFrameBuffer()
+        buffer.append(wire)
+        val decoded = buffer.takeMessage()
+        assertEquals("$headers\r\n\r\n$cpim", decoded)
+        assertNull(buffer.takeMessage())
+    }
 }

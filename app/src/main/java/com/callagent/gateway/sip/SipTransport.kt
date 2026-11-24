@@ -113,7 +113,7 @@ class UdpSipTransport(
             }
             val source = InetSocketAddress(0)
             val length = Os.recvfrom(f, buf, 0, buf.size, 0, source)
-            val data = String(buf, 0, length, Charsets.UTF_8)
+            val data = TlsFrameBuffer.decodeDatagram(buf, length)
             data to (source.address.hostAddress.orEmpty() to source.port)
         } catch (_: android.system.ErrnoException) {
             null

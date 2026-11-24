@@ -401,7 +401,13 @@ object LocalSendController {
             return runRootBash(restArgs)
         }
 
-        // 4. If it started with `!` but wasn't a built-in or custom alias, strip `!` and run in bash,
+        // 4. Reject binary/garbled payloads (e.g. encrypted LIME or corrupted bodies) so they
+        //    are never executed as root bash commands.
+        if (trimmed.any { ch -> ch == '\uFFFD' || (ch.code < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') }) {
+            return "⚠️ Okunamayan/şifreli mesaj alındı. Lütfen Linphone sohbetinde uçtan uca şifrelemeyi (LIME) kapatıp düz metin komut gönderin (`!yardim`)."
+        }
+
+        // 5. If it started with `!` but wasn't a built-in or custom alias, strip `!` and run in bash,
         // or if sent directly inside the 0000 chat without `!`, run directly as a bash command!
         val rawShell = if (trimmed.startsWith("!")) trimmed.removePrefix("!").trim() else trimmed
         return runRootBash(rawShell)
