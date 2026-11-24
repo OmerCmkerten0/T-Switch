@@ -275,6 +275,7 @@ class GatewayService : Service() {
 
     private val networkCheckRunning = AtomicBoolean(false)
     private val contactResolver = com.callagent.gateway.localsend.ContactCommandResolver()
+    @Volatile private var cloudWelcomeSent = false
 
     private fun resolveCurrentRouting(
         prefs: android.content.SharedPreferences,
@@ -958,9 +959,13 @@ class GatewayService : Service() {
         sourcePeer: Pair<String, Int>? = null
     ): Pair<Int, List<String>> {
         val type = msg.contentType?.lowercase().orEmpty()
-        if (type.isNotEmpty() && !type.startsWith("text/plain")) {
-            broadcastLog("SMS send refused: unsupported Content-Type '$type'")
-            return 415 to emptyList()
+        val decodedBody = when (val d = CommandAuthorization.decodeMessageBody(msg.contentType, msg.body)) {
+            is CommandAuthorization.DecodedMessageBody.Text -> d.text
+            is CommandAuthorization.DecodedMessageBody.IgnoreControl -> return 200 to emptyList()
+            is CommandAuthorization.DecodedMessageBody.Unsupported -> {
+                broadcastLog("SMS send refused: unsupported Content-Type '${d.contentType}'")
+                return 415 to emptyList()
+            }
         }
         val target = (msg.header("x-sms-to")
             ?: msg.requestUri?.let { msg.extractUser(it) }
@@ -968,6 +973,7 @@ class GatewayService : Service() {
             ?.trim().orEmpty()
         val fromUser = msg.from?.let { msg.extractUser(it) }
         val fromDomain = extractSipDomain(msg.from)
+        broadcastLog("SIP MESSAGE: from=$fromUser@$fromDomain to=$target ct='${type.ifEmpty { "text/plain" }}' local=$isLocalTransport")
         val pairedReceiverUser = PushWakeController.getReceiverUser(this)
         val allowedCloudDomains = setOfNotNull(
             PushWakeController.getDomain(this).takeIf { it.isNotBlank() },
@@ -984,7 +990,7 @@ class GatewayService : Service() {
             pairedReceiverUser = pairedReceiverUser,
             allowedCloudDomains = allowedCloudDomains,
             gatewayUser = cfgUser,
-            body = msg.body
+            body = decodedBody
         )
 
         return when (action) {
@@ -1933,6 +1939,23 @@ class GatewayService : Service() {
                 }
                 updateNotification(notifState, statusText)
                 broadcastStatus(state.name, info)
+                if (state == CallOrchestrator.BridgeState.IDLE &&
+                    registered &&
+                    activeRoutingDecision.mode == RoutingMode.CLOUD_ONLY_LINPHONE &&
+                    !cloudWelcomeSent
+                ) {
+                    cloudWelcomeSent = true
+                    LocalSendController.sendFakeSmsToZoiper(
+                        this@GatewayService,
+                        "🟢 T-Switch Bulut Terminal Hazır!\n" +
+                            "Komutları doğrudan bu sohbete yazın:\n" +
+                            "• !ara <numara veya ad>\n" +
+                            "• !sms <numara veya ad> <mesaj>\n" +
+                            "• !durum  • !batarya  • !yardim",
+                        logToHistory = false,
+                        preferCloud = true
+                    )
+                }
             }
 
             override fun onError(error: String) {

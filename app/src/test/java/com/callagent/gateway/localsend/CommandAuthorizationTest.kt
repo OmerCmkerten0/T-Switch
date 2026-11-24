@@ -331,4 +331,32 @@ class CommandAuthorizationTest {
             classifyCloud("! sms \"Ahmet Yılmaz\" Yoldayım geliyorum")
         )
     }
+
+    @Test
+    fun decodeMessageBodyUnwrapsLinphoneCpimAndIgnoresControlMessages() {
+        val cpim = "From: <sip:t-switch_receiver@sip.linphone.org>\r\n" +
+            "To: <sip:t-switch_pusher@sip.linphone.org>\r\n" +
+            "DateTime: 2026-11-24T20:40:00Z\r\n" +
+            "\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "\r\n" +
+            "!ara annem"
+        assertEquals(
+            CommandAuthorization.DecodedMessageBody.Text("!ara annem"),
+            CommandAuthorization.decodeMessageBody("message/cpim", cpim)
+        )
+        assertEquals(
+            CommandAuthorization.DecodedMessageBody.IgnoreControl,
+            CommandAuthorization.decodeMessageBody("application/im-iscomposing+xml", "<isComposing/>")
+        )
+        assertEquals(
+            CommandAuthorization.DecodedMessageBody.IgnoreControl,
+            CommandAuthorization.decodeMessageBody("message/imdn+xml", "<imdn/>")
+        )
+        val cpimImdn = "From: <sip:a@b>\r\n\r\nContent-Type: message/imdn+xml\r\n\r\n<imdn/>"
+        assertEquals(
+            CommandAuthorization.DecodedMessageBody.IgnoreControl,
+            CommandAuthorization.decodeMessageBody("message/cpim", cpimImdn)
+        )
+    }
 }

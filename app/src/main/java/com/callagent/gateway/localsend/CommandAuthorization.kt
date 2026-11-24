@@ -35,6 +35,54 @@ object CommandAuthorization {
 
     private val PHONE_ALLOWED_PUNCTUATION = setOf('+', '-', '.', '(', ')', ' ')
 
+    sealed class DecodedMessageBody {
+        data class Text(val text: String) : DecodedMessageBody()
+        object IgnoreControl : DecodedMessageBody()
+        data class Unsupported(val contentType: String) : DecodedMessageBody()
+    }
+
+    /**
+     * Unwraps plain text and Linphone's `message/cpim` chat envelopes, while
+     * silently ignoring typing (`im-iscomposing+xml`) and delivery receipt
+     * (`imdn+xml`) notifications so Linphone iOS/Android chats work seamlessly.
+     */
+    fun decodeMessageBody(contentType: String?, rawBody: String): DecodedMessageBody {
+        val ct = contentType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+        if (ct.isEmpty() || ct == "text/plain") {
+            return DecodedMessageBody.Text(rawBody)
+        }
+        if (ct == "application/im-iscomposing+xml" || ct == "message/imdn+xml") {
+            return DecodedMessageBody.IgnoreControl
+        }
+        if (ct == "message/cpim") {
+            val normalized = rawBody.replace("\r\n", "\n")
+            val afterCpimHeaders = normalized.substringAfter("\n\n", missingDelimiterValue = "")
+            if (afterCpimHeaders.isEmpty()) {
+                return DecodedMessageBody.Text(rawBody)
+            }
+            val innerHeaders = afterCpimHeaders.substringBefore("\n\n", missingDelimiterValue = "")
+            val innerPayload = afterCpimHeaders.substringAfter("\n\n", missingDelimiterValue = "")
+            if (innerPayload.isEmpty()) {
+                return DecodedMessageBody.Text(afterCpimHeaders.trim())
+            }
+            val innerCtLine = innerHeaders.lineSequence()
+                .firstOrNull { it.trimStart().startsWith("content-type:", ignoreCase = true) }
+                ?.substringAfter(':')
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase()
+                .orEmpty()
+            if (innerCtLine == "application/im-iscomposing+xml" || innerCtLine == "message/imdn+xml") {
+                return DecodedMessageBody.IgnoreControl
+            }
+            if (innerCtLine.isNotEmpty() && innerCtLine != "text/plain") {
+                return DecodedMessageBody.Unsupported(innerCtLine)
+            }
+            return DecodedMessageBody.Text(innerPayload)
+        }
+        return DecodedMessageBody.Unsupported(ct)
+    }
+
     /**
      * Classifies an inbound SIP MESSAGE into an [InboundMessageAction].
      */
