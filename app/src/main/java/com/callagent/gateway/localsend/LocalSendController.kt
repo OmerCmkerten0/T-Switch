@@ -53,7 +53,9 @@ object LocalSendController {
     private val registeredReceiver = AtomicBoolean(false)
     @Volatile private var appContext: Context? = null
     @Volatile private var activeSipProvider: (() -> SipClient?)? = null
+    @Volatile private var activeCloudSipProvider: (() -> SipClient?)? = null
     @Volatile private var logCallback: ((String) -> Unit)? = null
+    @Volatile internal var pushWakeTriggerListenerForTest: ((String) -> Unit)? = null
 
     /** Last battery percentage for which we sent a critical alert (-1 = none). */
     @Volatile private var lastAlertedPercent: Int = -1
@@ -138,11 +140,13 @@ object LocalSendController {
     fun attach(
         context: Context,
         sipProvider: () -> SipClient?,
-        logger: (String) -> Unit
+        logger: (String) -> Unit,
+        cloudSipProvider: (() -> SipClient?)? = null
     ) {
         val appCtx = context.applicationContext
         appContext = appCtx
         activeSipProvider = sipProvider
+        activeCloudSipProvider = cloudSipProvider
         logCallback = logger
 
         if (registeredReceiver.compareAndSet(false, true)) {
@@ -170,6 +174,7 @@ object LocalSendController {
     }
 
     fun triggerPushWakeIfNeeded(callerNumber: String): Boolean {
+        pushWakeTriggerListenerForTest?.invoke(callerNumber)
         val ctx = appContext ?: return false
         if (!PushWakeController.isConfigured(ctx)) return false
         PushWakeController.triggerWakeAsync(ctx, callerNumber)
@@ -247,7 +252,12 @@ object LocalSendController {
      * Executes a command received from Zoiper over the fake SMS channel and sends
      * the response back to Zoiper as a fake SMS from `0000` ("T-Switch Terminal").
      */
-    fun handleTerminalMessage(context: Context, targetUser: String, rawBody: String) {
+    fun handleTerminalMessage(
+        context: Context,
+        targetUser: String,
+        rawBody: String,
+        preferCloud: Boolean = false
+    ) {
         val cmdLine = rawBody.trim()
         if (cmdLine.isEmpty()) return
 
@@ -273,7 +283,7 @@ object LocalSendController {
             } catch (e: Exception) {
                 "❌ Komut hatası: ${e.javaClass.simpleName}: ${e.message}"
             }
-            sendFakeSmsToZoiper(context, reply, logToHistory = true)
+            sendFakeSmsToZoiper(context, reply, logToHistory = true, preferCloud = preferCloud)
         }
     }
 
@@ -651,15 +661,56 @@ object LocalSendController {
         }
     }
 
+    internal enum class FakeSmsRoute {
+        CLOUD,
+        PRIMARY_SERVER,
+        LOCAL_PEER,
+        NONE
+    }
+
+    internal fun selectFakeSmsRoute(
+        preferCloud: Boolean,
+        primarySip: SipClient?,
+        cloudSip: SipClient?
+    ): FakeSmsRoute {
+        val cloudReady = cloudSip != null && cloudSip.serverDomain.isNotBlank()
+        val primaryNonLocalReady = primarySip != null && !primarySip.localSendMode && primarySip.serverDomain.isNotBlank()
+        val primaryLocalFresh = primarySip != null && primarySip.localSendMode && primarySip.isLocalPeerFresh()
+
+        if (preferCloud) {
+            return when {
+                cloudReady -> FakeSmsRoute.CLOUD
+                primaryNonLocalReady -> FakeSmsRoute.PRIMARY_SERVER
+                else -> FakeSmsRoute.NONE
+            }
+        }
+
+        if (primarySip == null || (primarySip.localSendMode && !primaryLocalFresh)) {
+            if (cloudReady) return FakeSmsRoute.CLOUD
+        }
+
+        return when {
+            primarySip == null -> FakeSmsRoute.NONE
+            !primarySip.localSendMode -> if (primaryNonLocalReady) FakeSmsRoute.PRIMARY_SERVER else FakeSmsRoute.NONE
+            else -> FakeSmsRoute.LOCAL_PEER
+        }
+    }
+
     /**
      * Dispatches a SIP MESSAGE from `0000` ("T-Switch Terminal") directly to the
-     * connected Zoiper client over LAN/Hotspot.
+     * connected Zoiper client over LAN/Hotspot, or via cloud/server SIP when
+     * replying to a cloud command or when the local peer is unavailable.
      */
     fun sendFakeSmsToZoiper(
         context: Context,
         body: String,
-        logToHistory: Boolean = false
+        logToHistory: Boolean = false,
+        preferCloud: Boolean = false
     ): Boolean {
+        val primarySip = activeSipProvider?.invoke()
+        val cloudSip = activeCloudSipProvider?.invoke()
+        val route = selectFakeSmsRoute(preferCloud, primarySip, cloudSip)
+
         if (logToHistory) {
             runCatching {
                 CallLogStore.addEntry(
@@ -671,7 +722,7 @@ object LocalSendController {
                         durationSec = 0,
                         type = CallLogStore.TYPE_SMS,
                         text = body,
-                        status = "sent (local)"
+                        status = if (route == FakeSmsRoute.CLOUD) "sent (cloud)" else "sent (local)"
                     )
                 )
             }
@@ -679,39 +730,44 @@ object LocalSendController {
             logCallback?.invoke("TERMINAL SMS → Zoiper: $firstLine")
         }
 
-        val sip = activeSipProvider?.invoke() ?: return false
-        if (!sip.localSendMode) {
-            val receiverUser = PushWakeController.getReceiverUser(context)
-            val targetUri = "sip:$receiverUser@${sip.serverDomain}"
-            thread(name = "localsend-fakesms") {
-                val code = sip.sendSipMessage(
-                    targetUri = targetUri,
-                    fromUser = sip.username,
-                    body = body,
-                    fromDisplayName = TERMINAL_DISPLAY_NAME
-                )
-                Log.i(TAG, "Fake SMS via SIP server ($targetUri) answered $code")
+        return when (route) {
+            FakeSmsRoute.NONE -> false
+            FakeSmsRoute.CLOUD, FakeSmsRoute.PRIMARY_SERVER -> {
+                val serverSip = if (route == FakeSmsRoute.CLOUD) cloudSip!! else primarySip!!
+                val receiverUser = PushWakeController.getReceiverUser(context)
+                val targetUri = "sip:$receiverUser@${serverSip.serverDomain}"
+                thread(name = "localsend-fakesms") {
+                    val code = serverSip.sendSipMessage(
+                        targetUri = targetUri,
+                        fromUser = serverSip.username,
+                        body = body,
+                        fromDisplayName = TERMINAL_DISPLAY_NAME
+                    )
+                    Log.i(TAG, "Fake SMS via SIP server ($targetUri) answered $code")
+                }
+                true
             }
-            return true
-        }
+            FakeSmsRoute.LOCAL_PEER -> {
+                val sip = primarySip!!
+                val targetAddress = sip.resolveLocalPeerAddress(context) ?: run {
+                    Log.w(TAG, "sendFakeSmsToZoiper: No Zoiper peer address found yet")
+                    return false
+                }
+                val peerUser = sip.registeredPeerUser.ifEmpty { "zoiper" }
+                val targetUri = "sip:$peerUser@${targetAddress.first}:${targetAddress.second}"
 
-        val targetAddress = sip.resolveLocalPeerAddress(context) ?: run {
-            Log.w(TAG, "sendFakeSmsToZoiper: No Zoiper peer address found yet")
-            return false
+                thread(name = "localsend-fakesms") {
+                    val code = sip.sendSipMessageToAddress(
+                        targetUri = targetUri,
+                        targetAddress = targetAddress,
+                        fromUser = TERMINAL_NUMBER,
+                        fromDisplayName = TERMINAL_DISPLAY_NAME,
+                        body = body
+                    )
+                    Log.i(TAG, "Fake SMS to Zoiper ($targetUri) answered $code")
+                }
+                true
+            }
         }
-        val peerUser = sip.registeredPeerUser.ifEmpty { "zoiper" }
-        val targetUri = "sip:$peerUser@${targetAddress.first}:${targetAddress.second}"
-
-        thread(name = "localsend-fakesms") {
-            val code = sip.sendSipMessageToAddress(
-                targetUri = targetUri,
-                targetAddress = targetAddress,
-                fromUser = TERMINAL_NUMBER,
-                fromDisplayName = TERMINAL_DISPLAY_NAME,
-                body = body
-            )
-            Log.i(TAG, "Fake SMS to Zoiper ($targetUri) answered $code")
-        }
-        return true
     }
 }

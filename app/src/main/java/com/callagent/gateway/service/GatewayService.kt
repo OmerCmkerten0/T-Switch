@@ -57,6 +57,8 @@ class GatewayService : Service() {
 
     private var sipClient: SipClient? = null
     @Volatile private var cloudSipClient: SipClient? = null
+    @Volatile private var cloudStartAttemptAtMs: Long = 0L
+    private val cloudRecoveryLock = Any()
     private var orchestrator: CallOrchestrator? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -292,10 +294,13 @@ class GatewayService : Service() {
     private fun stopSipClients() {
         orchestrator?.stop()
         sipClient?.stop()
-        cloudSipClient?.stop()
+        synchronized(cloudRecoveryLock) {
+            cloudSipClient?.stop()
+            cloudSipClient = null
+            cloudStartAttemptAtMs = 0L
+        }
         orchestrator = null
         sipClient = null
-        cloudSipClient = null
     }
 
     private fun ensureForeground(
@@ -345,22 +350,131 @@ class GatewayService : Service() {
                 } else {
                     getLocalIp()
                 }
-                if (newIp == "0.0.0.0") return@thread
-                val baselineIp = currentNetworkIp.ifEmpty { currentLocalIp }
-                val ipChanged = newIp != baselineIp
-                val notRegistered = sipClient?.registered != true
-                if (ipChanged || notRegistered) {
-                    if (ipChanged) {
-                        broadcastLog("NET: IP changed $baselineIp → $newIp, reconnecting")
-                        com.callagent.gateway.localsend.LocalMdnsResponder.announceNow(this)
-                    } else {
-                        broadcastLog("NET: registration lost, reconnecting")
+                if (newIp != "0.0.0.0") {
+                    val baselineIp = currentNetworkIp.ifEmpty { currentLocalIp }
+                    val ipChanged = newIp != baselineIp
+                    val notRegistered = sipClient?.registered != true
+                    if (ipChanged || notRegistered) {
+                        if (ipChanged) {
+                            broadcastLog("NET: IP changed $baselineIp → $newIp, reconnecting")
+                            com.callagent.gateway.localsend.LocalMdnsResponder.announceNow(this)
+                        } else {
+                            broadcastLog("NET: registration lost, reconnecting")
+                        }
+                        reconnect()
+                        return@thread
                     }
-                    reconnect()
                 }
+                recoverHybridCloudSipIfNeeded()
             } finally {
                 networkCheckRunning.set(false)
             }
+        }
+    }
+
+    private fun recoverHybridCloudSipIfNeeded() {
+        if (stopped || initializing.get()) return
+        val localSip = sipClient ?: return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val net = cm.activeNetwork
+        val hasInternet = net?.let { cm.getNetworkCapabilities(it) }
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val pushConfigured = PushWakeController.isConfigured(this)
+
+        synchronized(cloudRecoveryLock) {
+            if (stopped || initializing.get() || sipClient !== localSip) return
+            val existing = cloudSipClient
+            val action = decideCloudSipRecovery(
+                routingMode = activeRoutingDecision.mode,
+                pushConfigured = pushConfigured,
+                hasInternet = hasInternet,
+                hasPrimaryLocalClient = true,
+                cloudExists = existing != null,
+                cloudRunning = existing?.isRunning == true,
+                cloudRegistered = existing?.registered == true,
+                nowMs = System.currentTimeMillis(),
+                lastAttemptMs = cloudStartAttemptAtMs
+            )
+            when (action) {
+                CloudRecoveryAction.NONE -> return
+                CloudRecoveryAction.RESTART_STALE -> {
+                    broadcastLog("CLOUD-SIP: restarting unregistered cloud companion on active internet")
+                    runCatching { existing?.stop() }
+                    if (cloudSipClient === existing) {
+                        cloudSipClient = null
+                    }
+                }
+                CloudRecoveryAction.START_NEW -> {
+                    broadcastLog("CLOUD-SIP: internet active — starting cloud companion")
+                }
+            }
+            val fallbackIp = getLocalIp().takeIf { it != "0.0.0.0" } ?: currentLocalIp.ifEmpty { "0.0.0.0" }
+            startHybridCloudCompanion(
+                localFallbackIp = fallbackIp,
+                activeNetwork = net,
+                expectedLocalSip = localSip,
+                gen = initGeneration.get()
+            )
+        }
+    }
+
+    private fun startHybridCloudCompanion(
+        localFallbackIp: String,
+        activeNetwork: Network?,
+        expectedLocalSip: SipClient,
+        gen: Int
+    ) {
+        if (!PushWakeController.isConfigured(this)) return
+        val cloudDomain = PushWakeController.getDomain(this)
+        val cloudUser = PushWakeController.getPusherUser(this)
+        val cloudPass = PushWakeController.getPassword(this)
+        val cloudLocalIp = getLocalIp().takeIf { it != "0.0.0.0" } ?: localFallbackIp
+        val cloud = SipClient(
+            username = cloudUser,
+            password = cloudPass,
+            serverDomain = cloudDomain,
+            serverPort = 5061,
+            localIp = cloudLocalIp,
+            localPort = 5063,
+            network = activeNetwork,
+            publicIp = cloudLocalIp,
+            useTls = true,
+            srtpRequested = false,
+            localSendMode = false
+        )
+        cloud.logListener = { msg -> broadcastLog("CLOUD-SIP: $msg") }
+        cloud.onSmsRequestWithPeer = { m, peer ->
+            onSmsSendRequest(m, isLocalTransport = false, sourcePeer = peer)
+        }
+        cloud.onSmsRequest = { m ->
+            onSmsSendRequest(m, isLocalTransport = false, sourcePeer = null)
+        }
+        cloud.listener = object : SipClient.Listener {
+            override fun onRegistered() {
+                broadcastLog("CLOUD-SIP: registered ($cloudUser@$cloudDomain:5061)")
+                flushSmsQueue("cloud-registered")
+            }
+            override fun onRegistrationFailed() {}
+            override fun onIncomingCall(call: com.callagent.gateway.sip.SipCall) {
+                call.reject(486, "Busy Here")
+            }
+            override fun onCallTerminated(call: com.callagent.gateway.sip.SipCall) {}
+        }
+        synchronized(cloudRecoveryLock) {
+            if (gen != initGeneration.get() || sipClient !== expectedLocalSip || stopped) {
+                return
+            }
+            cloudStartAttemptAtMs = System.currentTimeMillis()
+            cloudSipClient = cloud
+            runCatching { cloud.start() }
+                .onFailure { e ->
+                    Log.w(TAG, "Cloud companion SIP start failed: ${e.message}")
+                    broadcastLog("CLOUD-SIP: start deferred (${e.message})")
+                    runCatching { cloud.stop() }
+                    if (cloudSipClient === cloud) {
+                        cloudSipClient = null
+                    }
+                }
         }
     }
 
@@ -400,7 +514,7 @@ class GatewayService : Service() {
         createNotificationChannel()
         registerNetworkCallback()
         RootShell.init()
-        LocalSendController.attach(this, { sipClient }, { broadcastLog(it) })
+        LocalSendController.attach(this, { sipClient }, { broadcastLog(it) }, { cloudSipClient })
         com.callagent.gateway.localsend.LocalMdnsResponder.start(this)
         thread(name = "notif-setup") {
             applyNotificationVisibility()
@@ -867,7 +981,12 @@ class GatewayService : Service() {
                 enqueueOutboundGsmSms(msg, action.destinationNumber, action.text)
             }
             is InboundMessageAction.TerminalCommand -> {
-                LocalSendController.handleTerminalMessage(this, target, action.commandText)
+                LocalSendController.handleTerminalMessage(
+                    context = this,
+                    targetUser = target,
+                    rawBody = action.commandText,
+                    preferCloud = !isLocalTransport
+                )
                 200 to emptyList()
             }
             is InboundMessageAction.DirectGsmSms -> {
@@ -877,10 +996,7 @@ class GatewayService : Service() {
                         fromDomain?.contains("linphone.org", ignoreCase = true) == true
                     )
                 if (isPublicCloud) {
-                    val senderMatchesPaired = !fromUser.isNullOrBlank() &&
-                        pairedReceiverUser.isNotBlank() &&
-                        fromUser.trim().equals(pairedReceiverUser.trim(), ignoreCase = true)
-                    if (!senderMatchesPaired) {
+                    if (!isAuthorizedCloudSmsSender(fromUser, fromDomain, pairedReceiverUser, allowedCloudDomains)) {
                         broadcastLog("SMS send refused (403): unauthorized public-cloud sender '$fromUser@$fromDomain'")
                         return 403 to emptyList()
                     }
@@ -1459,8 +1575,11 @@ class GatewayService : Service() {
             )
         } else {
             // Custom SIP server mode: tear down cloud companion and clear local IP pin.
-            cloudSipClient?.stop()
-            cloudSipClient = null
+            synchronized(cloudRecoveryLock) {
+                cloudSipClient?.stop()
+                cloudSipClient = null
+                cloudStartAttemptAtMs = 0L
+            }
             LocalIpPinController.clearPin(decision.pinnedLocalIp)
 
             localIp = getLocalIp()
@@ -1659,50 +1778,13 @@ class GatewayService : Service() {
                 updateNotification(NotifState.OK, "Local Send ($localIp)")
                 broadcastLog("[v${BuildConfig.VERSION_NAME}] Hybrid Local IP aktif: $localIp:5060 (Zoiper/Linphone bekleniyor)")
                 broadcastStatus("IDLE", "Local Send ($localIp:5060)")
-                if (PushWakeController.isConfigured(this)) {
-                    val cloudDomain = PushWakeController.getDomain(this)
-                    val cloudUser = PushWakeController.getPusherUser(this)
-                    val cloudPass = PushWakeController.getPassword(this)
-                    val cloudLocalIp = getLocalIp().takeIf { it != "0.0.0.0" } ?: localIp
-                    val cloud = SipClient(
-                        username = cloudUser,
-                        password = cloudPass,
-                        serverDomain = cloudDomain,
-                        serverPort = 5061,
-                        localIp = cloudLocalIp,
-                        localPort = 5063,
-                        network = activeNetwork,
-                        publicIp = cloudLocalIp,
-                        useTls = true,
-                        srtpRequested = false,
-                        localSendMode = false
+                if (current() && PushWakeController.isConfigured(this)) {
+                    startHybridCloudCompanion(
+                        localFallbackIp = localIp,
+                        activeNetwork = activeNetwork,
+                        expectedLocalSip = sip,
+                        gen = gen
                     )
-                    cloud.logListener = { msg -> broadcastLog("CLOUD-SIP: $msg") }
-                    cloud.onSmsRequestWithPeer = { m, peer ->
-                        onSmsSendRequest(m, isLocalTransport = false, sourcePeer = peer)
-                    }
-                    cloud.onSmsRequest = { m ->
-                        onSmsSendRequest(m, isLocalTransport = false, sourcePeer = null)
-                    }
-                    cloud.listener = object : SipClient.Listener {
-                        override fun onRegistered() {
-                            broadcastLog("CLOUD-SIP: registered ($cloudUser@$cloudDomain:5061)")
-                            flushSmsQueue("cloud-registered")
-                        }
-                        override fun onRegistrationFailed() {}
-                        override fun onIncomingCall(call: com.callagent.gateway.sip.SipCall) {
-                            call.reject(486, "Busy Here")
-                        }
-                        override fun onCallTerminated(call: com.callagent.gateway.sip.SipCall) {}
-                    }
-                    if (current() && sipClient === sip) {
-                        cloudSipClient = cloud
-                        runCatching { cloud.start() }
-                            .onFailure { e ->
-                                Log.w(TAG, "Cloud companion SIP start failed: ${e.message}")
-                                broadcastLog("CLOUD-SIP: start deferred (${e.message})")
-                            }
-                    }
                 }
                 thread(name = "localsend-arp-probe") {
                     try {
@@ -2109,6 +2191,12 @@ class GatewayService : Service() {
         }
     }
 
+    internal enum class CloudRecoveryAction {
+        NONE,
+        START_NEW,
+        RESTART_STALE
+    }
+
     companion object {
         private const val TAG = "GatewayService"
         private const val LOG_BUFFER_SIZE = 200
@@ -2243,6 +2331,60 @@ class GatewayService : Service() {
                 action = ACTION_STOP
             }
             context.startService(intent)
+        }
+
+        /**
+         * Validates that a public-cloud `DirectGsmSms` sender matches BOTH the
+         * paired receiver SIP username and one of the allowed cloud SIP domains,
+         * blocking federated SIP domain spoofing (e.g. `t-switch_receiver@evil.com`).
+         */
+        fun isAuthorizedCloudSmsSender(
+            fromUser: String?,
+            fromDomain: String?,
+            pairedReceiverUser: String,
+            allowedDomains: Set<String>
+        ): Boolean {
+            val expectedUser = pairedReceiverUser.trim()
+            val actualUser = fromUser?.trim()
+            val actualDomain = fromDomain?.trim()
+            if (expectedUser.isEmpty() || actualUser.isNullOrEmpty() || actualDomain.isNullOrEmpty()) {
+                return false
+            }
+            if (!actualUser.equals(expectedUser, ignoreCase = true)) {
+                return false
+            }
+            return allowedDomains.any { domain ->
+                val trimmed = domain.trim()
+                trimmed.isNotEmpty() && trimmed.equals(actualDomain, ignoreCase = true)
+            }
+        }
+
+        internal fun decideCloudSipRecovery(
+            routingMode: RoutingMode,
+            pushConfigured: Boolean,
+            hasInternet: Boolean,
+            hasPrimaryLocalClient: Boolean,
+            cloudExists: Boolean,
+            cloudRunning: Boolean,
+            cloudRegistered: Boolean,
+            nowMs: Long,
+            lastAttemptMs: Long,
+            restartCooldownMs: Long = 10_000L
+        ): CloudRecoveryAction {
+            if (routingMode != RoutingMode.HYBRID_LOCAL_IP ||
+                !pushConfigured ||
+                !hasInternet ||
+                !hasPrimaryLocalClient
+            ) {
+                return CloudRecoveryAction.NONE
+            }
+            if (cloudRegistered) return CloudRecoveryAction.NONE
+            if (!cloudExists || !cloudRunning) return CloudRecoveryAction.START_NEW
+            return if (nowMs - lastAttemptMs >= restartCooldownMs) {
+                CloudRecoveryAction.RESTART_STALE
+            } else {
+                CloudRecoveryAction.NONE
+            }
         }
     }
 }

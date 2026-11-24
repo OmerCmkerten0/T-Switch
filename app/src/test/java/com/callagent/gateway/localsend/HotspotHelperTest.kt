@@ -46,6 +46,14 @@ class HotspotHelperTest {
         assertEquals("wlan0", wlan0WithTetherIp.ifaceName)
         assertEquals("192.168.43.1", wlan0WithTetherIp.ipAddress)
 
+        val wlan0NonTetherWithApFlag = HotspotHelper.classifyNetworkCandidates(
+            candidates = listOf("wlan0" to "192.168.100.1"),
+            wifiApEnabled = true
+        )
+        assertTrue("wlan0 with non-tether IP and wifiApEnabled=true should be classified as hotspot", wlan0NonTetherWithApFlag.active)
+        assertEquals("wlan0", wlan0NonTetherWithApFlag.ifaceName)
+        assertEquals("192.168.100.1", wlan0NonTetherWithApFlag.ipAddress)
+
         val usbTether = HotspotHelper.classifyNetworkCandidates(
             candidates = listOf("rndis0" to "192.168.42.129"),
             wifiApEnabled = false
@@ -73,5 +81,24 @@ class HotspotHelperTest {
         assertEquals("0.0.0.0", info.ipAddress)
         assertEquals("", info.wifiIpAddress)
         assertEquals("", info.wifiIfaceName)
+    }
+
+    @Test
+    fun internetSharingScriptsUseAndroidIpRuleFormatAndDrainDuplicates() {
+        val enableCmd = HotspotHelper.buildInternetSharingEnableCommand("wlan0")
+        assertTrue(
+            "Expected Android ip rule regex '(^1:|pref 1 )' in enable command, got: $enableCmd",
+            enableCmd.contains("grep -qE '(^1:|pref 1 )'")
+        )
+        assertFalse(
+            "Must not use broken literal 'grep -q \\'pref 1 \\''",
+            enableCmd.contains("grep -q 'pref 1 '")
+        )
+
+        val disableCmd = HotspotHelper.buildInternetSharingDisableCommand()
+        assertTrue(
+            "Expected loop draining duplicate pref 1 rules on disable, got: $disableCmd",
+            disableCmd.contains("while ip rule del pref 1")
+        )
     }
 }

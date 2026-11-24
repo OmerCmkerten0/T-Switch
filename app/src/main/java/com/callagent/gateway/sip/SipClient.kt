@@ -62,6 +62,16 @@ class SipClient(
     fun isLocalPeerFresh(nowMs: Long = System.currentTimeMillis(), ttlMs: Long = 65_000L): Boolean =
         registeredPeer != null && isPeerFresh(lastPeerSeenMs, nowMs, ttlMs)
 
+    internal fun setRegisteredPeerForTest(
+        peer: Pair<String, Int>?,
+        user: String = "zoiper",
+        seenAtMs: Long = System.currentTimeMillis()
+    ) {
+        registeredPeer = peer
+        registeredPeerUser = user
+        lastPeerSeenMs = if (peer != null) seenAtMs else 0L
+    }
+
     /** Call-IDs whose local LAN resend/Timer-A retransmit is suppressed (e.g. after cloud failover). */
     private val suppressedLocalCallIds = ConcurrentHashMap.newKeySet<String>()
 
@@ -110,6 +120,7 @@ class SipClient(
     private val cseq = AtomicInteger(1)
     private var callIdBase = "${System.currentTimeMillis() / 1000}@$publicIp"
     private val running = AtomicBoolean(false)
+    val isRunning: Boolean get() = running.get()
     @Volatile var registered = false; private set
     @Volatile private var lastRegisterTime = 0L
     /** Tracks last time we got ANY response from server (REGISTER, OPTIONS, etc.) */
@@ -153,7 +164,7 @@ class SipClient(
     @Volatile var onSmsRequestWithPeer: ((SipMessage, Pair<String, Int>) -> Pair<Int, List<String>>)? = null
 
     private fun uiLog(msg: String) {
-        Log.i(TAG, msg)
+        runCatching { Log.i(TAG, msg) }
         logListener?.invoke(msg)
     }
 
@@ -183,7 +194,12 @@ class SipClient(
         SipBuilder.userAgent =
             "T-Switch v${com.callagent.gateway.BuildConfig.VERSION_NAME} $handset"
         callIdBase = "${System.currentTimeMillis() / 1000}@$publicIp"
-        createSocket()
+        try {
+            createSocket()
+        } catch (e: Throwable) {
+            running.set(false)
+            throw e
+        }
 
         Thread({
             try { receiveLoop() }
@@ -287,9 +303,11 @@ class SipClient(
         if (executor == null) {
             uiLog("sendTo: executor is NULL — sending on new thread")
             Thread({
-                android.os.StrictMode.setThreadPolicy(
-                    android.os.StrictMode.ThreadPolicy.Builder().permitAll().build()
-                )
+                runCatching {
+                    android.os.StrictMode.setThreadPolicy(
+                        android.os.StrictMode.ThreadPolicy.Builder().permitAll().build()
+                    )
+                }
                 doSend(data, address)
             }, "SIP-FallbackSend").start()
             return
@@ -803,12 +821,12 @@ class SipClient(
         activeCalls[callId] = call
         if (!localSendMode) {
             sendTo(invite, peerAddr)
-            Log.i(TAG, "Sent INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)")
+            runCatching { Log.i(TAG, "Sent INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)") }
         } else if (initialPeer != null && initialPeer.first != localIp) {
             sendTo(invite, initialPeer)
-            Log.i(TAG, "Sent local INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)")
+            runCatching { Log.i(TAG, "Sent local INVITE RURI=$targetUri From=${call.fromHeader} (call-id=$callId)") }
         } else {
-            Log.i(TAG, "Local Send: no active LAN peer at call start — firing PushKit immediately (call-id=$callId)")
+            runCatching { Log.i(TAG, "Local Send: no active LAN peer at call start — awaiting peer or orchestrator failover (call-id=$callId)") }
         }
 
         // RFC 3261 Timer A: retransmit INVITE over UDP until any response is received.
@@ -822,15 +840,7 @@ class SipClient(
                 val maxRetransmits = if (localSendMode) 16 else 7
                 var elapsed = 0L
                 var unanswered = false
-                var wakeFired = false
                 var lastDest = peerAddr
-
-                if (localSendMode && initialPeer == null && callId !in suppressedLocalCallIds) {
-                    wakeFired = true
-                    if (com.callagent.gateway.localsend.LocalSendController.triggerPushWakeIfNeeded(callerIdNumber ?: targetExtension)) {
-                        uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma hemen gönderiliyor")
-                    }
-                }
 
                 for (i in 1..maxRetransmits) {
                     Thread.sleep(delay)
@@ -843,12 +853,6 @@ class SipClient(
                     }
                     if (!activeCalls.containsKey(callId)) break
                     if (callId in suppressedLocalCallIds) break
-                    if (localSendMode && !wakeFired && elapsed >= 500L) {
-                        wakeFired = true
-                        if (com.callagent.gateway.localsend.LocalSendController.triggerPushWakeIfNeeded(callerIdNumber ?: targetExtension)) {
-                            uiLog("Local Send: iPhone uykuda — sip.linphone.org Apple PushKit uyandırma gönderiliyor")
-                        }
-                    }
                     val currentDest = if (localSendMode) resolveLocalPeerAddress() else peerAddr
                     if (currentDest != null && (!localSendMode || currentDest.first != localIp)) {
                         if (localSendMode && currentDest != lastDest) {
@@ -857,7 +861,7 @@ class SipClient(
                             invite = buildOutboundInviteForPeer(call, targetExtension, currentDest, cseqNum)
                             call.originalInvite = SipMessage.parse(invite)
                         }
-                        Log.i(TAG, "INVITE retransmit #$i for $callId to ${currentDest.first}:${currentDest.second} (${delay}ms)")
+                        runCatching { Log.i(TAG, "INVITE retransmit #$i for $callId to ${currentDest.first}:${currentDest.second} (${delay}ms)") }
                         if (i == 1) uiLog("No response to INVITE — retransmitting")
                         sendTo(invite, currentDest)
                         if (localSendMode && currentDest.second != 5060) {

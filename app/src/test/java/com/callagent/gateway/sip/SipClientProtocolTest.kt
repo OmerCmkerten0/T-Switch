@@ -1,16 +1,21 @@
 package com.callagent.gateway.sip
 
+import com.callagent.gateway.localsend.LocalSendController
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class SipClientProtocolTest {
 
     @After
     fun resetSipBuilderTransport() {
         SipBuilder.transport = "UDP"
+        LocalSendController.pushWakeTriggerListenerForTest = null
     }
 
     @Test
@@ -168,5 +173,63 @@ class SipClientProtocolTest {
             localPort = 5060
         )
         assertFalse(plainBye.contains("Route:"))
+    }
+
+    @Test
+    fun localSendModeMakeCallNeverTriggersLegacyPushWake() {
+        val client = SipClient(
+            username = "tswitch",
+            password = "",
+            serverDomain = "192.168.43.1",
+            localIp = "192.168.43.1",
+            localPort = 5060,
+            localSendMode = true
+        )
+        client.setRegisteredPeerForTest("192.168.43.2" to 5060)
+
+        val wakeTriggered = CountDownLatch(1)
+        LocalSendController.pushWakeTriggerListenerForTest = { wakeTriggered.countDown() }
+
+        val call = client.makeCall(
+            targetExtension = "+905551234567",
+            localRtpPort = 10000,
+            callerIdNumber = "+905551234567"
+        )
+        try {
+            assertFalse(
+                "SipClient.makeCall must not trigger legacy 500ms PushKit wake; CallOrchestrator owns failover",
+                wakeTriggered.await(700, TimeUnit.MILLISECONDS)
+            )
+        } finally {
+            client.removeCall(call.callId)
+        }
+    }
+
+    @Test
+    fun failedStartResetsRunningFlagSoClientCanRetry() {
+        val closedPort = ServerSocket(0).use { it.localPort }
+        val client = SipClient(
+            username = "t-switch_pusher",
+            password = "secret",
+            serverDomain = "127.0.0.1",
+            serverPort = closedPort,
+            localIp = "127.0.0.1",
+            localPort = 5063,
+            useTls = true,
+            localSendMode = false
+        )
+
+        var threw = false
+        try {
+            client.start()
+        } catch (_: Throwable) {
+            threw = true
+        }
+
+        assertTrue("Expected initial start() against closed port to fail", threw)
+        assertFalse(
+            "Failed start() must reset running=false so subsequent recovery/start can retry",
+            client.isRunning
+        )
     }
 }

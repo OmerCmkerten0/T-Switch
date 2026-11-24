@@ -1,5 +1,6 @@
 package com.callagent.gateway.service
 
+import com.callagent.gateway.localsend.RoutingMode
 import com.callagent.gateway.sip.SipBuilder
 import com.callagent.gateway.sip.SipClient
 import org.junit.Assert.assertEquals
@@ -93,5 +94,167 @@ class GatewayPortResolutionTest {
         assertTrue(tlsRegister.contains(";transport=tls>"))
         assertTrue(udpInvite.contains("Via: SIP/2.0/UDP "))
         assertFalse(udpInvite.contains(";transport=tls"))
+    }
+
+    @Test
+    fun cloudSmsSenderAuthorizationRequiresBothPairedUserAndAllowedDomain() {
+        val allowed = setOf("sip.linphone.org")
+
+        assertTrue(
+            "Exact paired user on allowed domain must be accepted",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "t-switch_receiver",
+                fromDomain = "sip.linphone.org",
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+        assertTrue(
+            "Case-insensitive user and domain match must be accepted",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "T-Switch_Receiver",
+                fromDomain = "SIP.LINPHONE.ORG",
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+        assertFalse(
+            "Federated spoofed domain t-switch_receiver@evil.com must be rejected",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "t-switch_receiver",
+                fromDomain = "evil.com",
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+        assertFalse(
+            "Subdomain spoofing must be rejected",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "t-switch_receiver",
+                fromDomain = "sip.linphone.org.evil.com",
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+        assertFalse(
+            "Wrong user on allowed domain must be rejected",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "attacker",
+                fromDomain = "sip.linphone.org",
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+        assertFalse(
+            "Missing domain or user must be rejected",
+            GatewayService.isAuthorizedCloudSmsSender(
+                fromUser = "t-switch_receiver",
+                fromDomain = null,
+                pairedReceiverUser = "t-switch_receiver",
+                allowedDomains = allowed
+            )
+        )
+    }
+
+    @Test
+    fun hybridCloudRecoveryStartsMissingOrUnregisteredClientOnlyWhenOnline() {
+        assertEquals(
+            GatewayService.CloudRecoveryAction.START_NEW,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = false,
+                cloudRunning = false,
+                cloudRegistered = false,
+                nowMs = 20_000L,
+                lastAttemptMs = 0L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.START_NEW,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = true,
+                cloudRunning = false,
+                cloudRegistered = false,
+                nowMs = 20_000L,
+                lastAttemptMs = 19_500L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.NONE,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = true,
+                cloudRunning = true,
+                cloudRegistered = false,
+                nowMs = 20_000L,
+                lastAttemptMs = 15_000L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.RESTART_STALE,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = true,
+                cloudRunning = true,
+                cloudRegistered = false,
+                nowMs = 30_000L,
+                lastAttemptMs = 15_000L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.NONE,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = false,
+                hasPrimaryLocalClient = true,
+                cloudExists = false,
+                cloudRunning = false,
+                cloudRegistered = false,
+                nowMs = 30_000L,
+                lastAttemptMs = 0L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.NONE,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = false,
+                cloudRunning = false,
+                cloudRegistered = false,
+                nowMs = 30_000L,
+                lastAttemptMs = 0L
+            )
+        )
+        assertEquals(
+            GatewayService.CloudRecoveryAction.NONE,
+            GatewayService.decideCloudSipRecovery(
+                routingMode = RoutingMode.HYBRID_LOCAL_IP,
+                pushConfigured = true,
+                hasInternet = true,
+                hasPrimaryLocalClient = true,
+                cloudExists = true,
+                cloudRunning = true,
+                cloudRegistered = true,
+                nowMs = 30_000L,
+                lastAttemptMs = 0L
+            )
+        )
     }
 }

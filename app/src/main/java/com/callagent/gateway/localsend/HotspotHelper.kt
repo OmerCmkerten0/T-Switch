@@ -320,6 +320,25 @@ object HotspotHelper {
         }
     }
 
+    internal fun buildInternetSharingEnableCommand(hsIface: String): String =
+        "svc data enable 2>/dev/null; " +
+            "settings put global mobile_data 1 2>/dev/null; " +
+            "sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; " +
+            "for up in rmnet_data0 rmnet_data1 rmnet_data2 rmnet0 ccmni0 ccmni1; do " +
+            "  iptables -t nat -C POSTROUTING -o \$up -j MASQUERADE 2>/dev/null || " +
+            "  iptables -t nat -A POSTROUTING -o \$up -j MASQUERADE 2>/dev/null; " +
+            "done; " +
+            "iptables -C FORWARD -i $hsIface -j ACCEPT 2>/dev/null || " +
+            "iptables -I FORWARD 1 -i $hsIface -j ACCEPT 2>/dev/null; " +
+            "iptables -C FORWARD -o $hsIface -j ACCEPT 2>/dev/null || " +
+            "iptables -I FORWARD 1 -o $hsIface -j ACCEPT 2>/dev/null; " +
+            "(ip rule show | grep -qE '(^1:|pref 1 )' || ip rule add from all lookup main pref 1 2>/dev/null || true)"
+
+    internal fun buildInternetSharingDisableCommand(): String =
+        "svc data disable 2>/dev/null; " +
+            "settings put global mobile_data 0 2>/dev/null; " +
+            "while ip rule del pref 1 2>/dev/null; do :; done"
+
     /**
      * Toggles Mobile Data and Hotspot NAT forwarding for the `!internet` command.
      * Returns a formatted Turkish status report to send back to Zoiper as a Fake SMS.
@@ -334,18 +353,7 @@ object HotspotHelper {
 
         return if (targetOn) {
             RootShell.execForOutput(
-                "svc data enable 2>/dev/null; " +
-                    "settings put global mobile_data 1 2>/dev/null; " +
-                    "sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; " +
-                    "for up in rmnet_data0 rmnet_data1 rmnet_data2 rmnet0 ccmni0 ccmni1; do " +
-                    "  iptables -t nat -C POSTROUTING -o \$up -j MASQUERADE 2>/dev/null || " +
-                    "  iptables -t nat -A POSTROUTING -o \$up -j MASQUERADE 2>/dev/null; " +
-                    "done; " +
-                    "iptables -C FORWARD -i $hsIface -j ACCEPT 2>/dev/null || " +
-                    "iptables -I FORWARD 1 -i $hsIface -j ACCEPT 2>/dev/null; " +
-                    "iptables -C FORWARD -o $hsIface -j ACCEPT 2>/dev/null || " +
-                    "iptables -I FORWARD 1 -o $hsIface -j ACCEPT 2>/dev/null; " +
-                    "(ip rule show | grep -q 'pref 1 ' || ip rule add from all lookup main pref 1 2>/dev/null || true)",
+                buildInternetSharingEnableCommand(hsIface),
                 timeoutMs = 8000
             )
             // Wait briefly for cellular data to attach
@@ -359,9 +367,7 @@ object HotspotHelper {
                 "(Kapatmak için tekrar !internet yazın)"
         } else {
             RootShell.execForOutput(
-                "svc data disable 2>/dev/null; " +
-                    "settings put global mobile_data 0 2>/dev/null; " +
-                    "ip rule del pref 1 2>/dev/null || true",
+                buildInternetSharingDisableCommand(),
                 timeoutMs = 6000
             )
             "📴 [T-Switch İnternet Paylaşımı: KAPATILDI ❌]\n" +
