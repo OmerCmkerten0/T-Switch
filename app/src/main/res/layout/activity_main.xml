@@ -1049,16 +1049,15 @@
                             android:id="@+id/cbCfgLocalSend"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Local Send aktif (Hotspot yerel SIP sunucusu)"
+                            android:text="İkincil Yerel SIP Modu (192.168.1.85:5060)"
                             android:buttonTint="@color/accent"
                             android:textColor="@color/text_label"
-                            android:layout_marginTop="4dp"
-                            android:visibility="gone" />
+                            android:layout_marginTop="4dp" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Özel SIP sunucusu boş bırakıldığında T-Switch otomatik olarak Sabit Yerel IP (varsayılan 192.168.1.85:5060) + Linphone PushKit hibrit modunda çalışır. Özel bir SIP sunucusu girildiğinde tüm çağrı ve SMS trafiği o sunucuya geçer."
+                            android:text="Kapalıyken (Varsayılan): Yalnızca tek hesap (sip.linphone.org TLS + PushKit + akıllı !ara / !sms). Açıldığında yerel 192.168.1.85:5060 SIP sunucusu da devreye girer. Özel SIP sunucusu girildiğinde tüm ana işlemler o sunucuya geçer."
                             android:textSize="12sp"
                             android:textColor="@color/text_hint"
                             android:paddingTop="4dp" />

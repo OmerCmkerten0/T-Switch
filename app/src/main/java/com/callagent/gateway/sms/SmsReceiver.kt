@@ -78,16 +78,22 @@ class SmsReceiver : BroadcastReceiver() {
         )
         Log.i(TAG, "SMS from $sender (${parts.size} part(s), sub=$subId slot=$slot) queued as ${sms.id}")
 
-        runCatching {
+        val handledByTerminal = runCatching {
             com.callagent.gateway.localsend.LocalSendController.onIncomingCarrierSms(context, sender, text)
-        }
+        }.getOrDefault(false)
         runCatching {
             context.sendBroadcast(
                 Intent(GatewayService.LOG_ACTION).setPackage(context.packageName)
                     .putExtra("msg", "SMS: Gelen mesaj ($sender)")
             )
         }
-        GatewayService.deliverQueuedSms(context)
+        if (handledByTerminal) {
+            // Already delivered directly to the terminal chat — remove from SmsStore so
+            // GatewayService.deliverQueuedSms does not send a second duplicate copy!
+            SmsStore.remove(context, sms.id)
+        } else {
+            GatewayService.deliverQueuedSms(context)
+        }
     }
 
     /** Slot, carrier and own number for the subscription that received it. */

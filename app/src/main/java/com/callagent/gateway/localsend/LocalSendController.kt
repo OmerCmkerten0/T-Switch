@@ -64,6 +64,7 @@ object LocalSendController {
     @Volatile private var lastKnownTempTenths: Int = 0
     @Volatile private var lastKnownVoltageMv: Int = 0
     @Volatile private var lastWelcomePeerIp: String = ""
+    @Volatile private var lastWelcomeSentAtMs: Long = 0L
     @Volatile private var pendingCarrierQueryUntilMs: Long = 0L
 
     private val batteryReceiver = object : BroadcastReceiver() {
@@ -193,9 +194,12 @@ object LocalSendController {
      * Automatically seeds the "0000" (T-Switch Terminal) conversation in Zoiper.
      */
     fun onZoiperPeerReady(context: Context, peerIp: String, peerPort: Int, forceWelcome: Boolean = false) {
-        val peerKey = "$peerIp:$peerPort"
-        if (!forceWelcome && peerKey == lastWelcomePeerIp) return
-        lastWelcomePeerIp = peerKey
+        val now = System.currentTimeMillis()
+        // Key by IP only (ignore ephemeral source port changes) + 5-min cooldown so
+        // arp-probe (:5060) + REGISTER (:ephemeral) never send duplicate welcome/battery messages.
+        if (!forceWelcome && peerIp == lastWelcomePeerIp && (now - lastWelcomeSentAtMs) < 300_000L) return
+        lastWelcomePeerIp = peerIp
+        lastWelcomeSentAtMs = now
         thread(name = "localsend-welcome") {
             try {
                 // Wait briefly so Zoiper finishes its REGISTER 200 OK state transition
@@ -626,24 +630,24 @@ object LocalSendController {
      * If a carrier balance/GB query is active or the sender is Turkcell (`2200`/`2222`/`TURKCELL`),
      * mirrors the reply straight into the `0000` Linphone terminal chat.
      */
-    fun onIncomingCarrierSms(context: Context, sender: String, text: String) {
-        val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("local_send_enabled", false)) return
+    fun onIncomingCarrierSms(context: Context, sender: String, text: String): Boolean {
         val upper = sender.uppercase()
         val isCarrier = upper.contains("TURKCELL") || upper == "2200" || upper == "2222" || upper == "532"
         val queryActive = System.currentTimeMillis() <= pendingCarrierQueryUntilMs
-        if (!queryActive && !isCarrier) return
+        if (!queryActive && !isCarrier) return false
         if (queryActive && isCarrier) {
             pendingCarrierQueryUntilMs = 0L
         }
         val msg = "📶 [Operatör SMS — $sender]\n$text"
-        sendFakeSmsToZoiper(context, msg, logToHistory = true)
+        return sendFakeSmsToZoiper(context, msg, logToHistory = true)
     }
 
     private fun buildHelpReport(context: Context): String {
         val custom = loadCustomCommands(context)
         return buildString {
             appendLine("🛠️ [T-Switch Komut Kanalı Yardım]")
+            appendLine("• !ara <numara|isim>        : Numarayı veya rehberdeki kişiyi arar")
+            appendLine("• !sms <numara|isim> <metin>: Numaraya veya kişiye GSM SMS atar")
             appendLine("• !batarya     : Pil yüzdesi, sıcaklık ve şarj durumu")
             appendLine("• !ekran       : Ekran açık/kapalı durumu (!ekran ac / !ekran kapat)")
             appendLine("• !kiosk       : Kiosk & Veri/Pil Tasarruf modunu Aç/Kapat")

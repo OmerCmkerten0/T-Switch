@@ -184,9 +184,9 @@ class CommandAuthorizationTest {
         assertTrue(missingSmsText is InboundMessageAction.Reject)
         assertEquals(400, (missingSmsText as InboundMessageAction.Reject).statusCode)
 
-        val invalidCallback = classifyCloud("!ara invalid")
-        assertTrue(invalidCallback is InboundMessageAction.Reject)
-        assertEquals(400, (invalidCallback as InboundMessageAction.Reject).statusCode)
+        val emptyCallback = classifyCloud("!ara")
+        assertTrue(emptyCallback is InboundMessageAction.Reject)
+        assertEquals(400, (emptyCallback as InboundMessageAction.Reject).statusCode)
     }
 
     @Test
@@ -289,5 +289,46 @@ class CommandAuthorizationTest {
         assertFalse(CommandAuthorization.isPhoneNumber("1234567abc"))
         assertFalse(CommandAuthorization.isPhoneNumber(""))
         assertFalse(CommandAuthorization.isPhoneNumber("   "))
+    }
+
+    @Test
+    fun spacedBangCommandsAndContactNameQueriesAreClassifiedProperly() {
+        fun classifyCloud(body: String) = CommandAuthorization.classify(
+            isLocalTransport = false,
+            target = gatewayUser,
+            fromUser = pairedReceiver,
+            fromDomain = "sip.linphone.org",
+            sourcePeer = null,
+            registeredLocalPeer = null,
+            pairedReceiverUser = pairedReceiver,
+            allowedCloudDomains = allowedDomains,
+            gatewayUser = gatewayUser,
+            body = body
+        )
+
+        assertEquals(
+            InboundMessageAction.CallbackCall("+905321234567"),
+            classifyCloud("! ara +905321234567")
+        )
+        assertEquals(
+            InboundMessageAction.ContactCallQuery("Ahmet Yılmaz"),
+            classifyCloud("! ara Ahmet Yılmaz")
+        )
+        assertEquals(
+            InboundMessageAction.ContactCallQuery("annem"),
+            classifyCloud("!ara annem")
+        )
+        assertEquals(
+            InboundMessageAction.OutboundSmsCommand("05321234567", "Selam"),
+            classifyCloud("! sms 05321234567 Selam")
+        )
+        assertEquals(
+            InboundMessageAction.ContactSmsQuery("Ahmet", "Yoldayım"),
+            classifyCloud("!sms Ahmet Yoldayım")
+        )
+        assertEquals(
+            InboundMessageAction.ContactSmsQuery("Ahmet Yılmaz", "Yoldayım geliyorum"),
+            classifyCloud("! sms \"Ahmet Yılmaz\" Yoldayım geliyorum")
+        )
     }
 }

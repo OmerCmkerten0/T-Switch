@@ -294,7 +294,8 @@ class MainActivity : AppCompatActivity() {
             customSipServer = effectiveServer,
             customSipPort = prefs.getInt("port", 5060),
             customSipTls = prefs.getBoolean("sip_tls", false),
-            pinnedLocalIp = prefs.getString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP)
+            pinnedLocalIp = prefs.getString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP),
+            localSipModeEnabled = prefs.getBoolean("local_sip_mode_enabled", false)
         )
     }
 
@@ -559,83 +560,53 @@ class MainActivity : AppCompatActivity() {
         if (!prefs.getBoolean("autoconnect", true)) return
         val decision = resolveRoutingFromPrefs(prefs)
         val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        val isCloudOnly = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE
         val user = prefs.getString("user", "").orEmpty().trim()
-        if (!isHybrid && (decision.customServer.isEmpty() || user.isEmpty())) return
+        if (!isHybrid && !isCloudOnly && (decision.customServer.isEmpty() || user.isEmpty())) return
         val pass = prefs.getString("pass", "").orEmpty()
         GatewayService.start(
             this,
-            if (isHybrid) "" else decision.customServer,
+            if (isHybrid || isCloudOnly) "" else decision.customServer,
             decision.customPort,
-            if (isHybrid && user.isEmpty()) "tswitch" else user,
+            if ((isHybrid || isCloudOnly) && user.isEmpty()) "tswitch" else user,
             pass
         )
         running = true
         appendLog(
-            if (isHybrid) "Auto-starting Hybrid Local IP gateway (${decision.pinnedLocalIp}:5060)"
-            else "Auto-starting custom SIP gateway: $user@${decision.customServer}:${decision.customPort}"
+            when (decision.mode) {
+                RoutingMode.CLOUD_ONLY_LINPHONE -> "Auto-starting Cloud-Only Linphone gateway (sip.linphone.org:5061 TLS)"
+                RoutingMode.HYBRID_LOCAL_IP -> "Auto-starting Hybrid Local IP gateway (${decision.pinnedLocalIp}:5060)"
+                RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE -> "Auto-starting custom SIP gateway: $user@${decision.customServer}:${decision.customPort}"
+            }
         )
     }
 
-    /** One-tap toggle on the Settings card to switch back to Hybrid Local IP (or restore last custom SIP). */
+    /** One-tap toggle on the Settings card to enable/disable secondary Local SIP mode. */
     private fun toggleLocalSendFromHome() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         val currentDecision = resolveRoutingFromPrefs(prefs)
         val currentlyHybrid = currentDecision.mode == RoutingMode.HYBRID_LOCAL_IP
-        if (!currentlyHybrid) {
-            // Switch from custom SIP back to Hybrid Local IP by clearing custom server
-            prefs.edit()
-                .putString("last_custom_server", currentDecision.customServer)
-                .putString("server", "")
-                .putBoolean("local_send_enabled", true)
-                .apply()
-            findViewById<EditText>(R.id.etCfgServer)?.setText("")
-            findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = true
-            refreshLocalSendCard()
-            refreshKioskCard()
-            appendLog("Hibrit Sabit Yerel IP modu aktif edildi (${currentDecision.pinnedLocalIp}:5060)")
-            Toast.makeText(
-                this,
-                "Hibrit Sabit Yerel IP Aktif (${currentDecision.pinnedLocalIp}:5060)",
-                Toast.LENGTH_SHORT
-            ).show()
-            if (running) {
-                startService(Intent(this, GatewayService::class.java).apply {
-                    action = GatewayService.ACTION_APPLY_CONFIG
-                })
-            } else {
-                val port = prefs.getInt("port", 5060)
-                val user = prefs.getString("user", "")?.ifEmpty { "tswitch" } ?: "tswitch"
-                val pass = prefs.getString("pass", "") ?: ""
-                GatewayService.start(this, "", port, user, pass)
-                running = true
-            }
+        val nextLocalSip = !currentlyHybrid
+        prefs.edit()
+            .putBoolean("local_sip_mode_enabled", nextLocalSip)
+            .putBoolean("local_send_enabled", nextLocalSip)
+            .apply()
+        findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = nextLocalSip
+        refreshLocalSendCard()
+        refreshKioskCard()
+        val msg = if (nextLocalSip) {
+            "İkincil Yerel SIP Modu açıldı (${currentDecision.pinnedLocalIp}:5060)"
         } else {
-            val savedCustom = prefs.getString("last_custom_server", "").orEmpty().trim()
-            val user = prefs.getString("user", "").orEmpty().trim()
-            if (savedCustom.isNotEmpty() && user.isNotEmpty()) {
-                prefs.edit()
-                    .putString("server", savedCustom)
-                    .putBoolean("local_send_enabled", false)
-                    .apply()
-                findViewById<EditText>(R.id.etCfgServer)?.setText(savedCustom)
-                findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = false
-                refreshLocalSendCard()
-                refreshKioskCard()
-                appendLog("Özel SIP sunucusuna geçildi: $savedCustom")
-                Toast.makeText(this, "Özel SIP Aktif: $savedCustom", Toast.LENGTH_SHORT).show()
-                if (running) {
-                    startService(Intent(this, GatewayService::class.java).apply {
-                        action = GatewayService.ACTION_APPLY_CONFIG
-                    })
-                }
-            } else {
-                Toast.makeText(
-                    this,
-                    "Özel SIP sunucusuna geçmek için aşağıya Özel SIP Sunucusu girin",
-                    Toast.LENGTH_LONG
-                ).show()
-                findViewById<EditText>(R.id.etCfgServer)?.requestFocus()
-            }
+            "Bulut Tek Hesap Modu aktif (sip.linphone.org TLS)"
+        }
+        appendLog(msg)
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        if (running) {
+            startService(Intent(this, GatewayService::class.java).apply {
+                action = GatewayService.ACTION_APPLY_CONFIG
+            })
+        } else {
+            autoStartGateway()
         }
     }
 
@@ -851,7 +822,8 @@ class MainActivity : AppCompatActivity() {
             customSipServer = normalizedSrv,
             customSipPort = prefs.getInt("port", 5060),
             customSipTls = prefs.getBoolean("sip_tls", false),
-            pinnedLocalIp = pinned.ifEmpty { LocalIpPinController.DEFAULT_PINNED_IP }
+            pinnedLocalIp = pinned.ifEmpty { LocalIpPinController.DEFAULT_PINNED_IP },
+            localSipModeEnabled = prefs.getBoolean("local_sip_mode_enabled", false)
         )
         val shouldBeLocalSend = decision.mode == RoutingMode.HYBRID_LOCAL_IP
         if (prefs.getBoolean("local_send_enabled", !shouldBeLocalSend) != shouldBeLocalSend) {
@@ -962,7 +934,7 @@ class MainActivity : AppCompatActivity() {
     private fun openConfigView() {
         val prefs = getSharedPreferences("gateway", MODE_PRIVATE)
         val decision = resolveRoutingFromPrefs(prefs)
-        val displayServer = if (decision.mode == RoutingMode.HYBRID_LOCAL_IP) "" else decision.customServer
+        val displayServer = if (decision.mode == RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE) decision.customServer else ""
         findViewById<EditText>(R.id.etCfgServer).setText(displayServer)
         findViewById<EditText>(R.id.etCfgPort).setText(prefs.getInt("port", 5060).toString())
         findViewById<EditText>(R.id.etCfgUser).setText(prefs.getString("user", ""))
@@ -1008,7 +980,7 @@ class MainActivity : AppCompatActivity() {
 
         // Local Send & Virtual Command Terminal settings (synced from RoutingPolicy)
         findViewById<CheckBox>(R.id.cbCfgLocalSend).isChecked =
-            decision.mode == RoutingMode.HYBRID_LOCAL_IP
+            prefs.getBoolean("local_sip_mode_enabled", false)
         findViewById<EditText>(R.id.etCfgCritBattery).setText(
             prefs.getInt("critical_battery_threshold", 15).toString()
         )
@@ -1258,20 +1230,22 @@ class MainActivity : AppCompatActivity() {
             .text.toString().trim().toIntOrNull()?.coerceIn(1, 95) ?: 15
         val customCmds = findViewById<EditText>(R.id.etCfgCustomCmds).text.toString().trim()
 
+        val localSipEnabled = findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked ?: false
         val decision = RoutingPolicy.resolve(
             customSipServer = if (rawServer == "0.0.0.0") "" else rawServer,
             customSipPort = port,
             customSipTls = tls,
-            pinnedLocalIp = pinnedIpInput
+            pinnedLocalIp = pinnedIpInput,
+            localSipModeEnabled = localSipEnabled
         )
         val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
-        val storedServer = if (isHybrid) "" else decision.customServer
-        findViewById<CheckBox>(R.id.cbCfgLocalSend)?.isChecked = isHybrid
+        val isCloudOnly = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE
+        val storedServer = if (isHybrid || isCloudOnly) "" else decision.customServer
 
-        if (!isHybrid && (storedServer.isEmpty() || user.isEmpty())) {
+        if (!isHybrid && !isCloudOnly && (storedServer.isEmpty() || user.isEmpty())) {
             Toast.makeText(
                 this,
-                "Özel SIP sunucusu için kullanıcı adı gerekli (veya Sabit Yerel IP için sunucuyu boş bırakın)",
+                "Özel SIP sunucusu için kullanıcı adı gerekli (veya Bulut/Yerel mod için sunucuyu boş bırakın)",
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -1282,6 +1256,7 @@ class MainActivity : AppCompatActivity() {
             .putString("user", user)
             .putString("pass", pass)
             .putString("pinned_local_ip", decision.pinnedLocalIp)
+            .putBoolean("local_sip_mode_enabled", localSipEnabled)
             .putString("own_number", own)
             .also { ed ->
                 ownNumberFields.forEach { (slot, et) ->
@@ -1292,7 +1267,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("use_stun", useStun)
             .putBoolean("translit_ascii", translit)
             .putBoolean("call_monitor", callMonitor)
-            .putBoolean("sip_tls", if (isHybrid) tls else decision.customUseTls)
+            .putBoolean("sip_tls", if (isHybrid) tls else if (isCloudOnly) true else decision.customUseTls)
             .putBoolean("srtp_enabled", srtp)
             .putString("codec", codec)
             .putInt("agent_vol_step", agentVolStep)

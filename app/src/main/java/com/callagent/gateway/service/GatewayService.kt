@@ -274,6 +274,7 @@ class GatewayService : Service() {
     }
 
     private val networkCheckRunning = AtomicBoolean(false)
+    private val contactResolver = com.callagent.gateway.localsend.ContactCommandResolver()
 
     private fun resolveCurrentRouting(
         prefs: android.content.SharedPreferences,
@@ -283,11 +284,13 @@ class GatewayService : Service() {
         val cleaned = rawServer?.trim().orEmpty().let { if (it == "0.0.0.0") "" else it }
         val tls = prefs.getBoolean("sip_tls", false)
         val pinnedIp = prefs.getString("pinned_local_ip", LocalIpPinController.DEFAULT_PINNED_IP)
+        val localSipEnabled = prefs.getBoolean("local_sip_mode_enabled", false)
         return RoutingPolicy.resolve(
             customSipServer = cleaned,
             customSipPort = port,
             customSipTls = tls,
-            pinnedLocalIp = pinnedIp
+            pinnedLocalIp = pinnedIp,
+            localSipModeEnabled = localSipEnabled
         )
     }
 
@@ -724,16 +727,24 @@ class GatewayService : Service() {
         val savedPort = resolveEffectivePort(intentPort = -1, savedPort = prefs.getInt("port", 5060))
         val decision = resolveCurrentRouting(prefs, rawServer, savedPort)
         val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        val isCloudOnly = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE
         prefs.edit().putBoolean("local_send_enabled", isHybrid).apply()
 
         activeRoutingDecision = decision
-        cfgServer = decision.customServer
-        cfgPort = decision.customPort
-        cfgUser = prefs.getString("user", "").orEmpty().trim()
-        cfgPass = prefs.getString("pass", "").orEmpty()
+        if (isCloudOnly) {
+            cfgServer = PushWakeController.getDomain(this)
+            cfgPort = 5061
+            cfgUser = PushWakeController.getPusherUser(this)
+            cfgPass = PushWakeController.getPassword(this)
+        } else {
+            cfgServer = decision.customServer
+            cfgPort = decision.customPort
+            cfgUser = prefs.getString("user", "").orEmpty().trim()
+            cfgPass = prefs.getString("pass", "").orEmpty()
+        }
         if (isHybrid) {
             if (cfgUser.isEmpty()) cfgUser = "tswitch"
-        } else if (cfgServer.isEmpty() || cfgUser.isEmpty()) {
+        } else if (!isCloudOnly && (cfgServer.isEmpty() || cfgUser.isEmpty())) {
             broadcastLog("ERROR: Missing server or username")
             broadcastStatus("ERROR", "Missing SIP configuration")
             return
@@ -848,6 +859,24 @@ class GatewayService : Service() {
         if (sms.carrier.isNotEmpty()) headers += "X-SMS-Sim-Carrier: ${sms.carrier}"
         if (sms.attempts > 0) headers += "X-SMS-Attempt: ${sms.attempts + 1}"
 
+        if (activeRoutingDecision.mode == RoutingMode.CLOUD_ONLY_LINPHONE) {
+            if (sip == null || !sip.registered) return 0
+            val receiverUser = PushWakeController.getReceiverUser(this)
+            val cloudDomain = PushWakeController.getDomain(this)
+            val pusherUser = PushWakeController.getPusherUser(this)
+            val cloudCode = sip.sendSipMessage(
+                targetUri = "sip:$receiverUser@$cloudDomain",
+                fromUser = pusherUser,
+                fromDisplayName = sms.from.ifEmpty { "SMS" },
+                body = "📩 [${sms.from}]\n${sms.text}",
+                extraHeaders = headers
+            )
+            if (cloudCode in 200..299) {
+                broadcastLog("SMS: ${sms.id} delivered via Linphone cloud ($receiverUser@$cloudDomain)")
+            }
+            return cloudCode
+        }
+
         if (activeRoutingDecision.mode == RoutingMode.HYBRID_LOCAL_IP || sip?.localSendMode == true) {
             var localCode = 0
             if (sip != null && sip.isLocalPeerFresh()) {
@@ -960,27 +989,66 @@ class GatewayService : Service() {
 
         return when (action) {
             is InboundMessageAction.CallbackCall -> {
-                if (!PushWakeController.isConfigured(this)) {
-                    broadcastLog("CALLBACK refused (503): PushKit not configured")
-                    return 503 to emptyList()
-                }
-                val orch = orchestrator
-                if (orch == null) {
-                    broadcastLog("CALLBACK refused (503): orchestrator not ready")
-                    return 503 to emptyList()
-                }
-                if (orch.startCloudCallback(action.destinationNumber)) {
-                    broadcastLog("CALLBACK: started cloud callback to ${action.destinationNumber}")
-                    200 to emptyList()
-                } else {
-                    broadcastLog("CALLBACK refused (486): bridge busy (${action.destinationNumber})")
-                    486 to emptyList()
-                }
+                contactResolver.clearPending()
+                triggerCallbackFromMessage(action.destinationNumber, null, preferCloud = !isLocalTransport)
+            }
+            is InboundMessageAction.ContactCallQuery -> {
+                resolveContactActionAsync(
+                    query = action.nameQuery,
+                    smsText = null,
+                    msg = msg,
+                    preferCloud = !isLocalTransport
+                )
+                200 to emptyList()
             }
             is InboundMessageAction.OutboundSmsCommand -> {
+                contactResolver.clearPending()
                 enqueueOutboundGsmSms(msg, action.destinationNumber, action.text)
             }
+            is InboundMessageAction.ContactSmsQuery -> {
+                resolveContactActionAsync(
+                    query = action.nameQuery,
+                    smsText = action.text,
+                    msg = msg,
+                    preferCloud = !isLocalTransport
+                )
+                200 to emptyList()
+            }
             is InboundMessageAction.TerminalCommand -> {
+                if (contactResolver.hasPending()) {
+                    when (val pendingRes = contactResolver.handlePendingReply(action.commandText)) {
+                        is com.callagent.gateway.localsend.ContactResolution.ExecuteCall -> {
+                            triggerCallbackFromMessage(
+                                pendingRes.contact.number,
+                                pendingRes.contact.name,
+                                preferCloud = !isLocalTransport
+                            )
+                            return 200 to emptyList()
+                        }
+                        is com.callagent.gateway.localsend.ContactResolution.ExecuteSms -> {
+                            enqueueOutboundGsmSms(msg, pendingRes.contact.number, pendingRes.text)
+                            LocalSendController.sendFakeSmsToZoiper(
+                                this,
+                                "✉️ SMS gönderiliyor: ${pendingRes.contact.name} (${pendingRes.contact.number})",
+                                logToHistory = false,
+                                preferCloud = !isLocalTransport
+                            )
+                            return 200 to emptyList()
+                        }
+                        is com.callagent.gateway.localsend.ContactResolution.Cancelled -> {
+                            LocalSendController.sendFakeSmsToZoiper(
+                                this,
+                                pendingRes.message,
+                                logToHistory = false,
+                                preferCloud = !isLocalTransport
+                            )
+                            return 200 to emptyList()
+                        }
+                        else -> {
+                            // Not a confirmation reply — fall through to normal terminal command
+                        }
+                    }
+                }
                 LocalSendController.handleTerminalMessage(
                     context = this,
                     targetUser = target,
@@ -992,6 +1060,7 @@ class GatewayService : Service() {
             is InboundMessageAction.DirectGsmSms -> {
                 val isPublicCloud = !isLocalTransport && (
                     activeRoutingDecision.mode == RoutingMode.HYBRID_LOCAL_IP ||
+                        activeRoutingDecision.mode == RoutingMode.CLOUD_ONLY_LINPHONE ||
                         cfgServer.contains("linphone.org", ignoreCase = true) ||
                         fromDomain?.contains("linphone.org", ignoreCase = true) == true
                     )
@@ -1008,6 +1077,114 @@ class GatewayService : Service() {
                 action.statusCode to emptyList()
             }
         }
+    }
+
+    private fun triggerCallbackFromMessage(
+        destinationNumber: String,
+        contactName: String?,
+        preferCloud: Boolean
+    ): Pair<Int, List<String>> {
+        if (!PushWakeController.isConfigured(this)) {
+            broadcastLog("CALLBACK refused (503): PushKit not configured")
+            return 503 to emptyList()
+        }
+        val orch = orchestrator
+        if (orch == null) {
+            broadcastLog("CALLBACK refused (503): orchestrator not ready")
+            return 503 to emptyList()
+        }
+        return if (orch.startCloudCallback(destinationNumber)) {
+            val label = if (!contactName.isNullOrBlank()) "$contactName ($destinationNumber)" else destinationNumber
+            broadcastLog("CALLBACK: started cloud callback to $label")
+            LocalSendController.sendFakeSmsToZoiper(
+                this,
+                "📞 Aranıyor: $label — önce iPhone çalacak, açtığınızda karşı taraf aranacak.",
+                logToHistory = false,
+                preferCloud = preferCloud
+            )
+            200 to emptyList()
+        } else {
+            broadcastLog("CALLBACK refused (486): bridge busy ($destinationNumber)")
+            LocalSendController.sendFakeSmsToZoiper(
+                this,
+                "⚠️ Hat şu an meşgul, arama başlatılamadı ($destinationNumber).",
+                logToHistory = false,
+                preferCloud = preferCloud
+            )
+            486 to emptyList()
+        }
+    }
+
+    private fun resolveContactActionAsync(
+        query: String,
+        smsText: String?,
+        msg: com.callagent.gateway.sip.SipMessage,
+        preferCloud: Boolean
+    ) {
+        thread(name = "contact-resolve") {
+            val contacts = loadDeviceContactsForTerminal()
+            val res = if (smsText == null) {
+                contactResolver.resolveCall(query, contacts)
+            } else {
+                contactResolver.resolveSms(query, smsText, contacts)
+            }
+            when (res) {
+                is com.callagent.gateway.localsend.ContactResolution.ExecuteCall -> {
+                    triggerCallbackFromMessage(res.contact.number, res.contact.name, preferCloud)
+                }
+                is com.callagent.gateway.localsend.ContactResolution.ExecuteSms -> {
+                    val (code, _) = enqueueOutboundGsmSms(msg, res.contact.number, res.text)
+                    val reply = if (code in 200..299) {
+                        "✉️ SMS gönderiliyor: ${res.contact.name} (${res.contact.number})"
+                    } else {
+                        "❌ SMS gönderilemedi (HTTP/SIP $code): ${res.contact.name} (${res.contact.number})"
+                    }
+                    LocalSendController.sendFakeSmsToZoiper(this, reply, logToHistory = false, preferCloud = preferCloud)
+                }
+                is com.callagent.gateway.localsend.ContactResolution.AskConfirmation -> {
+                    LocalSendController.sendFakeSmsToZoiper(
+                        this,
+                        res.promptMessage,
+                        logToHistory = false,
+                        preferCloud = preferCloud
+                    )
+                }
+                is com.callagent.gateway.localsend.ContactResolution.NotFound -> {
+                    LocalSendController.sendFakeSmsToZoiper(
+                        this,
+                        res.message,
+                        logToHistory = false,
+                        preferCloud = preferCloud
+                    )
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun loadDeviceContactsForTerminal(): List<com.callagent.gateway.localsend.ContactEntry> {
+        val result = mutableListOf<com.callagent.gateway.localsend.ContactEntry>()
+        try {
+            val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(
+                android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
+            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val numIdx = cursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (cursor.moveToNext()) {
+                    val name = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty().trim() else ""
+                    val num = if (numIdx >= 0) cursor.getString(numIdx).orEmpty().trim() else ""
+                    if (name.isNotEmpty() && num.isNotEmpty()) {
+                        result.add(com.callagent.gateway.localsend.ContactEntry(name, num))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadDeviceContactsForTerminal failed: ${e.message}")
+        }
+        return result
     }
 
     private fun enqueueOutboundGsmSms(
@@ -1454,9 +1631,10 @@ class GatewayService : Service() {
 
         val decision = resolveCurrentRouting(prefs, rawServer, port)
         val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
+        val isCloudOnly = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE
         prefs.edit().putBoolean("local_send_enabled", isHybrid).apply()
 
-        if (!isHybrid && (decision.customServer.isEmpty() || username.isEmpty())) {
+        if (!isHybrid && !isCloudOnly && (decision.customServer.isEmpty() || username.isEmpty())) {
             Log.e(TAG, "Missing SIP configuration")
             broadcastLog("ERROR: Missing server or username")
             broadcastStatus("ERROR", "Missing SIP configuration")
@@ -1465,7 +1643,7 @@ class GatewayService : Service() {
         }
 
         // Save for restart if non-placeholder custom SIP values were provided
-        if (!isHybrid && decision.customServer.isNotEmpty()) {
+        if (!isHybrid && !isCloudOnly && decision.customServer.isNotEmpty()) {
             prefs.edit()
                 .putString("server", decision.customServer)
                 .putInt("port", decision.customPort)
@@ -1486,10 +1664,17 @@ class GatewayService : Service() {
             prefs.getInt("agent_vol_step", 0)
 
         activeRoutingDecision = decision
-        cfgServer = decision.customServer
-        cfgPort = decision.customPort
-        cfgUser = if (isHybrid && username.isEmpty()) "tswitch" else username
-        cfgPass = password
+        if (isCloudOnly) {
+            cfgServer = PushWakeController.getDomain(this)
+            cfgPort = 5061
+            cfgUser = PushWakeController.getPusherUser(this)
+            cfgPass = PushWakeController.getPassword(this)
+        } else {
+            cfgServer = decision.customServer
+            cfgPort = decision.customPort
+            cfgUser = if (isHybrid && username.isEmpty()) "tswitch" else username
+            cfgPass = password
+        }
 
         notifStatusText = "Connecting"
         ensureForeground(NotifState.WARN, "Connecting")
@@ -1614,12 +1799,23 @@ class GatewayService : Service() {
                 return
             }
 
-            cfgServer = decision.customServer
-            cfgPort = decision.customPort
-            useTls = decision.customUseTls
-            sipServerDomain = decision.customServer
-            sipServerPort = decision.customPort
-            if (useTls) broadcastLog("SIP transport: TLS to $sipServerDomain:$sipServerPort")
+            if (decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE) {
+                cfgServer = PushWakeController.getDomain(this)
+                cfgPort = 5061
+                cfgUser = PushWakeController.getPusherUser(this)
+                cfgPass = PushWakeController.getPassword(this)
+                useTls = true
+                sipServerDomain = cfgServer
+                sipServerPort = 5061
+                broadcastLog("CLOUD ONLY MODE: TLS to $sipServerDomain:$sipServerPort (user=$cfgUser)")
+            } else {
+                cfgServer = decision.customServer
+                cfgPort = decision.customPort
+                useTls = decision.customUseTls
+                sipServerDomain = decision.customServer
+                sipServerPort = decision.customPort
+                if (useTls) broadcastLog("SIP transport: TLS to $sipServerDomain:$sipServerPort")
+            }
             bindPort = 5062
         }
 

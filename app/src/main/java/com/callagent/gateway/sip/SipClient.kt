@@ -483,6 +483,11 @@ class SipClient(
 
         // Page-mode MESSAGE from the server — an SMS to send.
         if (msg.isRequest && msg.method == "MESSAGE") {
+            if (isDuplicateInboundMessage(seenInboundMessages, msg.callId, msg.cseq)) {
+                Log.d(TAG, "Ignoring duplicate SIP MESSAGE retransmission (call-id=${msg.callId}, cseq=${msg.cseq})")
+                sendTo(SipBuilder.statusResponse(msg, 200, "OK"), address)
+                return
+            }
             val (code, extra) = try {
                 onSmsRequestWithPeer?.invoke(msg, address)
                     ?: onSmsRequest?.invoke(msg)
@@ -890,6 +895,7 @@ class SipClient(
     }
 
     private val pendingMessages = ConcurrentHashMap<String, MessageTxn>()
+    private val seenInboundMessages = ConcurrentHashMap<String, Long>()
 
     /**
      * Send a SIP MESSAGE and wait for its final response.
@@ -1335,6 +1341,28 @@ class SipClient(
                 delayMs = (delayMs * 2).coerceAtMost(MAX_MS)
                 return wait
             }
+        }
+
+        fun isDuplicateInboundMessage(
+            seenCache: ConcurrentHashMap<String, Long>,
+            callId: String?,
+            cseq: String?,
+            nowMs: Long = System.currentTimeMillis(),
+            ttlMs: Long = 60_000L
+        ): Boolean {
+            val id = callId?.trim().orEmpty()
+            val seq = cseq?.trim().orEmpty()
+            if (id.isEmpty() || seq.isEmpty()) return false
+            val key = "$id|$seq"
+            if (seenCache.size > 64) {
+                seenCache.entries.removeIf { (_, ts) -> nowMs - ts > ttlMs }
+            }
+            val prev = seenCache[key]
+            if (prev != null && nowMs - prev <= ttlMs) {
+                return true
+            }
+            seenCache[key] = nowMs
+            return false
         }
     }
 }

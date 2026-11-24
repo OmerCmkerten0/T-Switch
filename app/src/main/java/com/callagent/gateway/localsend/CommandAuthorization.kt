@@ -6,7 +6,9 @@ package com.callagent.gateway.localsend
 sealed class InboundMessageAction {
     data class TerminalCommand(val commandText: String) : InboundMessageAction()
     data class CallbackCall(val destinationNumber: String) : InboundMessageAction()
+    data class ContactCallQuery(val nameQuery: String) : InboundMessageAction()
     data class OutboundSmsCommand(val destinationNumber: String, val text: String) : InboundMessageAction()
+    data class ContactSmsQuery(val nameQuery: String, val text: String) : InboundMessageAction()
     data class DirectGsmSms(val destinationNumber: String, val text: String) : InboundMessageAction()
     data class Reject(val statusCode: Int, val reason: String) : InboundMessageAction()
 }
@@ -134,27 +136,39 @@ object CommandAuthorization {
     }
 
     private fun dispatchTerminalBody(trimmedBody: String): InboundMessageAction {
-        if (hasCommandPrefix(trimmedBody, PREFIX_ARA)) {
-            val number = trimmedBody.drop(PREFIX_ARA.length).trim()
-            return if (isPhoneNumber(number)) {
-                InboundMessageAction.CallbackCall(number)
+        // Normalize optional whitespace after '!' (e.g., "! ara 0532..." -> "!ara 0532...")
+        val normalizedCmd = if (trimmedBody.startsWith("!")) {
+            "!" + trimmedBody.drop(1).trimStart()
+        } else {
+            trimmedBody
+        }
+
+        if (hasCommandPrefix(normalizedCmd, PREFIX_ARA)) {
+            val arg = normalizedCmd.drop(PREFIX_ARA.length).trim()
+            if (arg.isEmpty()) {
+                return InboundMessageAction.Reject(400, "Invalid Callback Target")
+            }
+            return if (isPhoneNumber(arg)) {
+                InboundMessageAction.CallbackCall(arg)
             } else {
-                InboundMessageAction.Reject(400, "Invalid Callback Number")
+                InboundMessageAction.ContactCallQuery(arg)
             }
         }
 
-        if (hasCommandPrefix(trimmedBody, PREFIX_SMS)) {
-            val rest = trimmedBody.drop(PREFIX_SMS.length).trim()
-            val spaceIdx = rest.indexOfFirst { it.isWhitespace() }
-            if (spaceIdx <= 0) {
+        if (hasCommandPrefix(normalizedCmd, PREFIX_SMS)) {
+            val rest = normalizedCmd.drop(PREFIX_SMS.length).trim()
+            if (rest.isEmpty()) {
                 return InboundMessageAction.Reject(400, "Invalid SMS Command")
             }
-            val number = rest.substring(0, spaceIdx).trim()
-            val smsText = rest.substring(spaceIdx + 1).trim()
-            return if (isPhoneNumber(number) && smsText.isNotEmpty()) {
-                InboundMessageAction.OutboundSmsCommand(number, smsText)
+            val (recipient, smsText) = parseSmsTargetAndBody(rest)
+                ?: return InboundMessageAction.Reject(400, "Invalid SMS Command")
+            if (recipient.isEmpty() || smsText.isEmpty()) {
+                return InboundMessageAction.Reject(400, "Invalid SMS Command")
+            }
+            return if (isPhoneNumber(recipient)) {
+                InboundMessageAction.OutboundSmsCommand(recipient, smsText)
             } else {
-                InboundMessageAction.Reject(400, "Invalid SMS Command")
+                InboundMessageAction.ContactSmsQuery(recipient, smsText)
             }
         }
 
@@ -162,7 +176,22 @@ object CommandAuthorization {
             return InboundMessageAction.CallbackCall(trimmedBody)
         }
 
-        return InboundMessageAction.TerminalCommand(trimmedBody)
+        return InboundMessageAction.TerminalCommand(normalizedCmd)
+    }
+
+    private fun parseSmsTargetAndBody(rest: String): Pair<String, String>? {
+        if (rest.startsWith("\"")) {
+            val closeIdx = rest.indexOf('"', startIndex = 1)
+            if (closeIdx <= 1) return null
+            val target = rest.substring(1, closeIdx).trim()
+            val text = rest.substring(closeIdx + 1).trim()
+            return if (target.isNotEmpty() && text.isNotEmpty()) target to text else null
+        }
+        val spaceIdx = rest.indexOfFirst { it.isWhitespace() }
+        if (spaceIdx <= 0) return null
+        val target = rest.substring(0, spaceIdx).trim()
+        val text = rest.substring(spaceIdx + 1).trim()
+        return if (target.isNotEmpty() && text.isNotEmpty()) target to text else null
     }
 
     private fun hasCommandPrefix(body: String, prefix: String): Boolean {

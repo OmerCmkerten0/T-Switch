@@ -232,4 +232,15 @@ class SipClientProtocolTest {
             client.isRunning
         )
     }
+
+    @Test
+    fun inboundMessageDeduplicatesSameCallIdAndCSeq() {
+        val seen = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        assertFalse(SipClient.isDuplicateInboundMessage(seen, "call-1", "1 MESSAGE", 1_000L))
+        assertTrue(SipClient.isDuplicateInboundMessage(seen, "call-1", "1 MESSAGE", 2_000L))
+        assertFalse(SipClient.isDuplicateInboundMessage(seen, "call-1", "2 MESSAGE", 2_500L))
+        assertFalse(SipClient.isDuplicateInboundMessage(seen, "call-2", "1 MESSAGE", 2_500L))
+        // After 60s TTL, same key is accepted again
+        assertFalse(SipClient.isDuplicateInboundMessage(seen, "call-1", "1 MESSAGE", 62_000L))
+    }
 }

@@ -4,6 +4,7 @@ package com.callagent.gateway.localsend
  * Primary traffic routing mode for T-Switch.
  */
 enum class RoutingMode {
+    CLOUD_ONLY_LINPHONE,
     HYBRID_LOCAL_IP,
     CUSTOM_SIP_WITH_PUSH_WAKE
 }
@@ -37,7 +38,8 @@ object RoutingPolicy {
         customSipServer: String?,
         customSipPort: Int,
         customSipTls: Boolean,
-        pinnedLocalIp: String? = LocalIpPinController.DEFAULT_PINNED_IP
+        pinnedLocalIp: String? = LocalIpPinController.DEFAULT_PINNED_IP,
+        localSipModeEnabled: Boolean = false
     ): RoutingDecision {
         val candidatePinnedIp = pinnedLocalIp?.trim().orEmpty()
         val resolvedPinnedIp = if (LocalIpPinController.isValidRoutableIpv4(candidatePinnedIp)) {
@@ -51,7 +53,7 @@ object RoutingPolicy {
 
         if (server.isEmpty() || server.equals(LINPHONE_CLOUD_HOST, ignoreCase = true)) {
             return RoutingDecision(
-                mode = RoutingMode.HYBRID_LOCAL_IP,
+                mode = if (localSipModeEnabled) RoutingMode.HYBRID_LOCAL_IP else RoutingMode.CLOUD_ONLY_LINPHONE,
                 customServer = "",
                 customPort = validPort,
                 customUseTls = false,

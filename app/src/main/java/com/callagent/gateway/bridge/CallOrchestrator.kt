@@ -1243,6 +1243,13 @@ class CallOrchestrator(
         val pushConfigured = PushWakeController.isConfigured(context)
 
         when (mode) {
+            RoutingMode.CLOUD_ONLY_LINPHONE -> {
+                val pushCallbacks = buildHybridPushCallbacks(rtpPort, callGen)
+                PushWakeController.setCallBridgeCallbacks(pushCallbacks)
+                Log.i(TAG, "CLOUD_ONLY_LINPHONE: launching cloud PushKit directly (caller=$callerNumber, rtp=$rtpPort)")
+                launchHybridCloudPush(gsmCall, rtpPort, callGen)
+            }
+
             RoutingMode.HYBRID_LOCAL_IP -> {
                 val pushCallbacks = buildHybridPushCallbacks(rtpPort, callGen)
                 PushWakeController.setCallBridgeCallbacks(pushCallbacks)
@@ -1355,6 +1362,7 @@ class CallOrchestrator(
     private fun canAttemptSipForward(): Boolean {
         val pushReady = PushWakeController.isConfigured(context)
         return when (routingDecision.mode) {
+            RoutingMode.CLOUD_ONLY_LINPHONE -> pushReady
             RoutingMode.HYBRID_LOCAL_IP ->
                 sipClient.resolveLocalPeerAddress(context) != null || pushReady
             RoutingMode.CUSTOM_SIP_WITH_PUSH_WAKE ->

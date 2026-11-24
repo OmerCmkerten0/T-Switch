@@ -8,13 +8,32 @@ import org.junit.Test
 class RoutingPolicyTest {
 
     @Test
-    fun blankOrLinphoneServerSelectsHybridLocalIp() {
+    fun blankOrLinphoneServerDefaultsToCloudOnlyLinphone() {
         val inputs = listOf(null, "", "   ", "sip.linphone.org", "SIP.LINPHONE.ORG", "  sip.linphone.org  ")
         for (server in inputs) {
             val decision = RoutingPolicy.resolve(
                 customSipServer = server,
                 customSipPort = 5060,
-                customSipTls = false
+                customSipTls = false,
+                localSipModeEnabled = false
+            )
+            assertEquals("Expected CLOUD_ONLY_LINPHONE for '$server'", RoutingMode.CLOUD_ONLY_LINPHONE, decision.mode)
+            assertFalse("Expected pushWakeOnly=false for '$server'", decision.pushWakeOnly)
+            assertEquals("192.168.1.85", decision.pinnedLocalIp)
+            assertEquals("", decision.customServer)
+            assertFalse(decision.customUseTls)
+        }
+    }
+
+    @Test
+    fun blankOrLinphoneServerSelectsHybridLocalIpWhenLocalSipEnabled() {
+        val inputs = listOf(null, "", "   ", "sip.linphone.org", "SIP.LINPHONE.ORG", "  sip.linphone.org  ")
+        for (server in inputs) {
+            val decision = RoutingPolicy.resolve(
+                customSipServer = server,
+                customSipPort = 5060,
+                customSipTls = false,
+                localSipModeEnabled = true
             )
             assertEquals("Expected HYBRID_LOCAL_IP for '$server'", RoutingMode.HYBRID_LOCAL_IP, decision.mode)
             assertFalse("Expected pushWakeOnly=false for '$server'", decision.pushWakeOnly)
