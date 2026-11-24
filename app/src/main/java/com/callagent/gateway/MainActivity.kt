@@ -697,7 +697,15 @@ class MainActivity : AppCompatActivity() {
                 refreshKioskCard()
             }
             "contacts" -> loadContactsList(findViewById<EditText>(R.id.etContactsSearch)?.text?.toString().orEmpty())
-            "logs" -> svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
+            "logs" -> {
+                val buffered = GatewayService.logSnapshot()
+                tvLog.text = if (buffered.isNotEmpty()) {
+                    buffered.joinToString("\n", postfix = "\n")
+                } else {
+                    "(Henüz log kaydı yok)\n"
+                }
+                svLog.post { svLog.fullScroll(ScrollView.FOCUS_DOWN) }
+            }
         }
     }
 

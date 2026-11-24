@@ -378,9 +378,19 @@ class CallOrchestrator(
                     }
                 }
             },
-            onRejectedOrEnded = { _, reason ->
+            onRejectedOrEnded = { code, reason ->
                 if (generation == callGen) {
+                    val failedBeforeAnswer = bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING
                     tearDown(reason)
+                    if (failedBeforeAnswer) {
+                        val hint = if (code == 486) " (iPhone Odak/Rahatsız Etme veya Linphone DND açık olabilir)" else ""
+                        com.callagent.gateway.localsend.LocalSendController.sendFakeSmsToZoiper(
+                            context,
+                            "❌ Arama kurulamadı ($cleanDest): $reason$hint",
+                            logToHistory = false,
+                            preferCloud = true
+                        )
+                    }
                 }
             },
             wakeOnly = false,
