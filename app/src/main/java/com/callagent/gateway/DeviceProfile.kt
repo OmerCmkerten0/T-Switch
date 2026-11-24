@@ -1076,12 +1076,13 @@ data class DeviceProfile(
             name = "MSM8937/8940 (GM 8)",
             silenceLocalAudio = true,
             mixerSetupCmd = buildString {
-                // Silence local speaker output so call audio stays strictly on the digital bridge
-                append("tinymix 'Voice Rx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                // Keep modem Voice Rx unmuted so VOC_REC_DL digital downlink capture stays live;
+                // silence the physical speaker/earpiece at the codec output instead (RX1/RX3/SPK).
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'SPK DAC Switch' 0 2>/dev/null; ")
-                append("tinymix 'RX1 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX2 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX3 Digital Volume' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 // Keep Voice Tx open for incall_music injection, mute physical mic device & codec ADCs
@@ -1114,6 +1115,9 @@ data class DeviceProfile(
                 append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
                 append("tinymix 'Voice Tx Device Mute' 0 4294967295 20 2>/dev/null; ")
                 append("tinymix 'Voice Tx Mute' 0 4294967295 500 2>/dev/null; ")
+                append("tinymix 'SPK' 'Switch' 2>/dev/null; ")
+                append("tinymix 'RX3 MIX1 INP1' 'RX1' 2>/dev/null; ")
+                append("tinymix 'RX1 MIX1 INP1' 'RX1' 2>/dev/null; ")
                 append("tinymix 'SPK DAC Switch' 1 2>/dev/null; ")
                 append("tinymix 'RX1 Digital Volume' 84 2>/dev/null; ")
                 append("tinymix 'RX2 Digital Volume' 84 2>/dev/null; ")
@@ -1141,10 +1145,11 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia1' 1 2>/dev/null")
             },
             mixerIncallMusicCmd = buildString {
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
+                append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'SPK DAC Switch' 0 2>/dev/null; ")
-                append("tinymix 'RX1 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX2 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX3 Digital Volume' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
@@ -1170,12 +1175,12 @@ data class DeviceProfile(
                 // AudioRecord.startRecording() triggers HAL path voice-speaker-dmic-ef &
                 // incall-rec-uplink-and-downlink, which re-enables DEC1/DEC2 mics and VOC_REC_UL.
                 // Re-cut physical mics and uplink echo immediately after capture starts.
-                append("tinymix 'Voice Rx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
                 append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
+                append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
+                append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'SPK DAC Switch' 0 2>/dev/null; ")
-                append("tinymix 'RX1 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX2 Digital Volume' 0 2>/dev/null; ")
-                append("tinymix 'RX3 Digital Volume' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
