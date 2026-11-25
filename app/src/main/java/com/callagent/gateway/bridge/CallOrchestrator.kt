@@ -358,12 +358,13 @@ class CallOrchestrator(
                     (bridgeState == BridgeState.SIP_CALLING || bridgeState == BridgeState.SIP_RINGING)
                 ) {
                     Log.i(TAG, "Cloud callback answered by iPhone (RTP=$addr:$port pt=$pt) — dialing GSM $cleanDest")
+                    pendingRtpAddr = addr
+                    pendingRtpPort = port
+                    pendingPayloadType = pt
+                    pendingLocalRtpPort = rtpPort
                     bridgeState = BridgeState.GSM_DIALING
                     lastStateChangeTime = System.currentTimeMillis()
                     listener?.onStateChanged(bridgeState, "GSM aranıyor: $cleanDest")
-                    Thread({
-                        startRtp(rtpPort, addr, port, pt)
-                    }, "RTP-Start").start()
                     val dialed = GsmCallManager.makeCall(context, cleanDest, null, headless = true)
                     if (!dialed) {
                         Log.e(TAG, "Cloud callback failed to place GSM call to $cleanDest")
@@ -906,13 +907,33 @@ class CallOrchestrator(
             }
             BridgeState.GSM_DIALING -> {
                 if (pendingCallbackDest != null) {
-                    // iPhone-first Cloud Callback: iPhone already answered and RTP is running.
+                    // iPhone-first Cloud Callback: GSM is now ACTIVE (mode=2, VoiceMMode1 up) —
+                    // start RTP now so AudioRecord attaches to the live voice session.
                     val dest = pendingCallbackDest
                     pendingCallbackDest = null
-                    bridgeState = BridgeState.BRIDGED
-                    lastStateChangeTime = System.currentTimeMillis()
-                    listener?.onStateChanged(bridgeState, "Bridged (callback: $dest)")
-                    Log.i(TAG, "Cloud callback bridge established for $dest")
+                    val addr = pendingRtpAddr
+                    val port = pendingRtpPort
+                    val pt = pendingPayloadType
+                    val localPort = pendingLocalRtpPort
+                    pendingRtpAddr = null
+                    if (addr != null && port > 0) {
+                        Thread({
+                            startRtp(localPort, addr, port, pt)
+                            if (bridgeState == BridgeState.IDLE || bridgeState == BridgeState.TEARING_DOWN) {
+                                Log.w(TAG, "Callback bridge torn down during RTP setup")
+                                return@Thread
+                            }
+                            bridgeState = BridgeState.BRIDGED
+                            lastStateChangeTime = System.currentTimeMillis()
+                            listener?.onStateChanged(bridgeState, "Bridged (callback: $dest)")
+                            Log.i(TAG, "Cloud callback bridge established for $dest")
+                        }, "RTP-Start").start()
+                    } else {
+                        bridgeState = BridgeState.BRIDGED
+                        lastStateChangeTime = System.currentTimeMillis()
+                        listener?.onStateChanged(bridgeState, "Bridged (callback: $dest)")
+                        Log.i(TAG, "Cloud callback bridge established for $dest")
+                    }
                 } else if (diallerInitiated) {
                     // DIALLER flow: GSM active → place SIP call to Asterisk (like inbound)
                     diallerInitiated = false
