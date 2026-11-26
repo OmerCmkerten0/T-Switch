@@ -59,6 +59,7 @@ class RtpSession(
     @Volatile private var socketFd: java.io.FileDescriptor? = null
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
+    @Volatile private var alsaPlayback: AlsaPcmPlayback? = null
     /** 1 or 2, per [DeviceProfile.playbackStereo]. */
     private var playbackChannels = 1
 
@@ -514,6 +515,22 @@ class RtpSession(
             if (audioDiagnosticsEnabled()) logCaptureDiagnostics(record)
         }
 
+        if (profile.useRootAlsaPlayback) {
+            enableIncallMusicViaMixer()
+            val alsa = AlsaPcmPlayback(context)
+            if (alsa.open()) {
+                alsaPlayback = alsa
+                audioTrack = null
+                playbackChannels = 1
+                playbackUsageName = "ROOT_ALSA"
+                Log.i(TAG, "Audio init: root ALSA direct playback active (rate=$playbackRate, profile=${profile.name})")
+                return true
+            } else {
+                Log.w(TAG, "Root ALSA open failed — falling back to AudioTrack")
+                alsa.close()
+            }
+        }
+
         // Minimum buffer for lowest latency.  incall_music injects
         // AudioTrack output digitally into the modem uplink — there is no
         // acoustic speaker→mic path, so deep-buffer headroom is unnecessary.
@@ -879,8 +896,10 @@ class RtpSession(
         workers = emptyList()
         val rec = audioRecord
         val trk = audioTrack
+        val alsa = alsaPlayback
         audioRecord = null
         audioTrack = null
+        alsaPlayback = null
         socketFd = null
         jitterBuffer.clear()
 
@@ -899,6 +918,9 @@ class RtpSession(
             trk?.let {
                 try { it.stop() } catch (_: Exception) {}
                 try { it.release() } catch (_: Exception) {}
+            }
+            alsa?.let {
+                try { it.close() } catch (_: Exception) {}
             }
             // Repeat the inactive state after the native streams are released
             // in case AudioFlinger recreated the output while they drained.
@@ -1739,32 +1761,34 @@ class RtpSession(
     }
 
     private fun playbackLoop() {
-        val track = audioTrack ?: return
+        val alsa = alsaPlayback
+        val track = audioTrack
+        if (alsa == null && track == null) return
 
         // Mute speaker DAC/digital volumes and route Incall_Music via ALSA mixer
-        // synchronously BEFORE track.play() starts outputting audio, so the HAL
+        // synchronously BEFORE playback starts outputting audio, so the HAL
         // cannot burst unmuted initial audio out of the loudspeaker.
         enableIncallMusicViaMixer()
         if (!running.get()) return
 
-        // No prefill — the silence-frame loop below feeds the AudioTrack
-        // continuously, preventing underruns.  Removing the old 20ms prefill
-        // saves that much initial latency.
-        track.play()
-        Log.i(TAG, "Playback started (rate=$playbackRate usage=$playbackUsageName deepBuffer=true) " +
-            "routedTo=${track.routedDevice?.type}")
+        if (alsa != null) {
+            Log.i(TAG, "Playback started (rate=$playbackRate rootAlsa=true)")
+        } else if (track != null) {
+            // No prefill — the silence-frame loop below feeds the AudioTrack
+            // continuously, preventing underruns.  Removing the old 20ms prefill
+            // saves that much initial latency.
+            track.play()
+            Log.i(TAG, "Playback started (rate=$playbackRate usage=$playbackUsageName deepBuffer=true) " +
+                "routedTo=${track.routedDevice?.type}")
 
-        // Set incall_music_enabled=true AFTER AudioTrack.play(): the Qualcomm
-        // HAL on MSM8930 starts the incall-music usecase only once there is an
-        // active STREAM_MUSIC output.
-        //
-        // Skipped where the profile already set it before the track existed.
-        // Toggling it again here reconfigures the voice path and tears down the
-        // in-call record session the HAL has just started — measured on SM6150:
-        // VOICE_CALL delivered real audio (rawRMS=208) until this second toggle
-        // fired 8ms later, after which capture went to zero.
-        if (!profile.incallMusicBeforeTrack) {
-            enableIncallMusic()
+            // Set incall_music_enabled=true AFTER AudioTrack.play(): the Qualcomm
+            // HAL on MSM8930 starts the incall-music usecase only once there is an
+            // active STREAM_MUSIC output.
+            //
+            // Skipped where the profile already set it before the track existed.
+            if (!profile.incallMusicBeforeTrack) {
+                enableIncallMusic()
+            }
         }
 
         // Silence frame for when jitter buffer is empty — prevents underruns
@@ -1790,8 +1814,12 @@ class RtpSession(
                 // and a silence frame went to the caller instead.
                 val encoded = jitterBuffer.poll(JITTER_POLL_MS, TimeUnit.MILLISECONDS)
                 if (encoded == null) {
-                    // Write silence to keep AudioTrack fed and prevent underruns.
-                    writePlaybackFrame(track, silenceFrame)
+                    // Write silence to keep stream fed and prevent underruns.
+                    if (alsa != null) {
+                        alsa.writeSilence20ms()
+                    } else if (track != null) {
+                        writePlaybackFrame(track, silenceFrame)
+                    }
                     underruns++
                     playbackRms = 0
                     currentPlaybackActive = false
@@ -1864,8 +1892,12 @@ class RtpSession(
                 playbackRms = if (playbackGain > 1) pcmRms(pcm) else rawRms
                 feedMonitor(pcm)
                 playDump?.let { try { it.write(pcm) } catch (_: Exception) {} }
-                val out = if (playbackChannels == 2) monoToStereo(pcm) else pcm
-                writePlaybackFrame(track, out)
+                if (alsa != null) {
+                    alsa.writeFrame20ms(pcm, playbackRate)
+                } else if (track != null) {
+                    val out = if (playbackChannels == 2) monoToStereo(pcm) else pcm
+                    writePlaybackFrame(track, out)
+                }
                 playbackFrames++
             } catch (e: InterruptedException) {
                 break
@@ -2130,6 +2162,7 @@ class RtpSession(
      * toggle in enableIncallMusic() fired before the route settled.
      */
     private fun reToggleIncallMusic() {
+        if (alsaPlayback != null) return
         val param = profile.incallMusicParam
         if (param.isEmpty()) return
         if (profile.incallMusicBeforeTrack) {

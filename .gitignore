@@ -10,6 +10,8 @@ local.properties
 .gradle/
 build/
 app/build/
+.cxx/
+app/.cxx/
 
 
 # IDE

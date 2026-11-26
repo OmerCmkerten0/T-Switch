@@ -13,6 +13,9 @@ android {
         targetSdk = 34
         versionCode = 455
         versionName = "1.4.14"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // A release build is signed with the same debug key the debug build uses.
@@ -41,6 +44,18 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     compileOptions {
