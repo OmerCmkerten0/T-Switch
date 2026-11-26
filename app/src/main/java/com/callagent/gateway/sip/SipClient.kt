@@ -996,7 +996,7 @@ class SipClient(
         val callId = msg.callId ?: return false
         val txn = pendingMessages[callId] ?: return false
         val code = msg.statusCode ?: 0
-        if (code == 100) return true          // provisional, keep waiting
+        if (isProvisionalMessageStatus(code)) return true // 100 Trying, 110 Push Sent, etc. — keep waiting for final 2xx/4xx
         if (code == 401 || code == 407) {
             txn.challenge = SipAuth.parseChallenge(msg)
         }
@@ -1229,7 +1229,9 @@ class SipClient(
 
         /** How long to wait for a MESSAGE's final response before treating it
          *  as unsent and leaving it queued for the next attempt. */
-        private const val MESSAGE_TIMEOUT_SEC = 10L
+        private const val MESSAGE_TIMEOUT_SEC = 15L
+
+        internal fun isProvisionalMessageStatus(code: Int): Boolean = code in 100..199
 
         /** Consecutive failures before asking GatewayService for a new socket. */
         private const val MAX_REGISTER_FAILURES = 3

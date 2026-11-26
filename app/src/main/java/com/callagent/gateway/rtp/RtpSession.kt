@@ -1023,7 +1023,7 @@ class RtpSession(
             Thread({
                 val out = RootShell.execForOutput(capCmd, timeoutMs = 8000)
                 Log.i(TAG, "Mixer capture routing (t=0): $out")
-                if (running.get() && profile.silenceLocalAudio) {
+                if (running.get()) {
                     try {
                         Thread.sleep(600)
                     } catch (_: InterruptedException) {
@@ -1380,7 +1380,7 @@ class RtpSession(
         if (running.get()) {
             reAssertAppOps()
             reToggleIncallMusic()
-            if (profile.silenceLocalAudio && profile.mixerCaptureCmd.isNotEmpty()) {
+            if (profile.mixerCaptureCmd.isNotEmpty()) {
                 val capCmd = DeviceProfile.resolveCmd(profile.mixerCaptureCmd)
                 if (capCmd.isNotEmpty()) {
                     val out3 = RootShell.execForOutput(capCmd, timeoutMs = 8000)

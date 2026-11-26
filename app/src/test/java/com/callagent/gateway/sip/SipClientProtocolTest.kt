@@ -243,4 +243,17 @@ class SipClientProtocolTest {
         // After 60s TTL, same key is accepted again
         assertFalse(SipClient.isDuplicateInboundMessage(seen, "call-1", "1 MESSAGE", 62_000L))
     }
+
+    @Test
+    fun provisional1xxMessageStatusesIncluding110PushSentKeepWaiting() {
+        assertTrue(SipClient.isProvisionalMessageStatus(100))
+        assertTrue(SipClient.isProvisionalMessageStatus(110))
+        assertTrue(SipClient.isProvisionalMessageStatus(180))
+        assertTrue(SipClient.isProvisionalMessageStatus(199))
+        assertFalse(SipClient.isProvisionalMessageStatus(200))
+        assertFalse(SipClient.isProvisionalMessageStatus(202))
+        assertFalse(SipClient.isProvisionalMessageStatus(401))
+        assertFalse(SipClient.isProvisionalMessageStatus(407))
+        assertFalse(SipClient.isProvisionalMessageStatus(486))
+    }
 }

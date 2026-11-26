@@ -1074,7 +1074,12 @@ data class DeviceProfile(
         /** Qualcomm MSM8937 / MSM8940 (Snapdragon 435 — General Mobile GM 8 / GM8_sprout) */
         fun msm8937() = DeviceProfile(
             name = "MSM8937/8940 (GM 8)",
-            silenceLocalAudio = true,
+            // CRITICAL: Keep silenceLocalAudio = false on MSM8937!
+            // Telecom setMuted(true), AudioManager.isMicrophoneMute=true, and STREAM_VOICE_CALL
+            // ADJUST_MUTE all trigger Qualcomm's global Voice Tx Mute / kill incall_music injection
+            // into the modem uplink. Physical speaker and mic are silenced strictly at the ALSA
+            // mixer level below (PRI_MI2S_RX_Voice=0, SPK/RX3/RX1=ZERO, TERT_MI2S_TX=0, DEC1-4=ZERO).
+            silenceLocalAudio = false,
             mixerSetupCmd = buildString {
                 // Keep modem Voice Rx unmuted so VOC_REC_DL digital downlink capture stays live;
                 // disconnect VoiceMMode1/CSVoice from PRI_MI2S_RX and silence codec outputs so
@@ -1244,9 +1249,9 @@ data class DeviceProfile(
             captureGain = 3,
             playbackGain = 2,
             noiseGateThreshold = 0,
-            echoGateThreshold = 300,
-            doubleTalkRatio = 1.5f,
-            playbackLeaksIntoCapture = false,
+            echoGateThreshold = 400,
+            doubleTalkRatio = 1.6f,
+            playbackLeaksIntoCapture = true,
             requireSpeakerMode = true,
             incallMusicParam = "incall_music_enabled",
             voiceDownlinkWorks = true,
