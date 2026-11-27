@@ -1,6 +1,8 @@
 package com.callagent.gateway.rtp
 
+import com.callagent.gateway.DeviceProfile
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
@@ -92,13 +94,28 @@ class AlsaPcmPlaybackTest {
 
     @Test
     fun selectIncallMusicPcmDeviceChoosesSim2WhenPcm35RunningElseSim1() {
-        assertEquals(16, AlsaPcmPlayback.selectDeviceId("state: RUNNING\nhw_ptr: 123"))
-        assertEquals(16, AlsaPcmPlayback.selectDeviceId("RUNNING"))
+        assertEquals(14, AlsaPcmPlayback.selectDeviceId("state: RUNNING\nhw_ptr: 123"))
+        assertEquals(14, AlsaPcmPlayback.selectDeviceId("RUNNING"))
         assertEquals(1, AlsaPcmPlayback.selectDeviceId("closed"))
         assertEquals(1, AlsaPcmPlayback.selectDeviceId(""))
         assertEquals(1, AlsaPcmPlayback.selectDeviceId(null))
-        assertEquals(240 to 4, AlsaPcmPlayback.periodConfigForDevice(1))
-        assertEquals(960 to 2, AlsaPcmPlayback.periodConfigForDevice(16))
+        assertEquals(240 to 2, AlsaPcmPlayback.periodConfigForDevice(1))
+        assertEquals(960 to 2, AlsaPcmPlayback.periodConfigForDevice(14))
+    }
+
+    @Test
+    fun msm8937ProfileKeepsVoiceRoutesAliveAndAvoidsBrokenTinymixMutes() {
+        val profile = DeviceProfile.msm8937()
+        assertTrue(profile.useRootAlsaPlayback)
+        assertTrue(profile.primeCaptureBeforePlayback)
+        val combined = listOf(profile.mixerSetupCmd, profile.mixerIncallMusicCmd, profile.mixerCaptureCmd)
+        for (cmd in combined) {
+            assertFalse("Must not disable VoiceMMode1 RX (triggers voc_disable_cvp)", cmd.contains("VoiceMMode1' 0"))
+            assertFalse("Must not disable VoiceMMode1 TX (triggers voc_disable_cvp)", cmd.contains("TERT_MI2S_TX_MMode1' 0"))
+            assertFalse("Must not write 3-arg Voice Tx Device Mute via tinymix", cmd.contains("Voice Tx Device Mute"))
+            assertFalse("Must not write Incall_Music MM1", cmd.contains("Incall_Music Audio Mixer MultiMedia1' 1"))
+            assertFalse("Must not write Incall_Music MM5", cmd.contains("Incall_Music Audio Mixer MultiMedia5' 1"))
+        }
     }
 
     @Test

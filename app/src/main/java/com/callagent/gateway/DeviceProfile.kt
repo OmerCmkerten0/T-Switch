@@ -1083,17 +1083,18 @@ data class DeviceProfile(
             name = "MSM8937/8940 (GM 8)",
             // CRITICAL: Keep silenceLocalAudio = false on MSM8937!
             // Telecom setMuted(true), AudioManager.isMicrophoneMute=true, and STREAM_VOICE_CALL
-            // ADJUST_MUTE all trigger Qualcomm's global Voice Tx Mute / kill incall_music injection
-            // into the modem uplink. Physical speaker and mic are silenced strictly at the ALSA
-            // mixer level below (PRI_MI2S_RX_Voice=0, SPK/RX3/RX1=ZERO, TERT_MI2S_TX=0, DEC1-4=ZERO).
+            // ADJUST_MUTE kill voice uplink / incall_music on Qualcomm HALs.
+            //
+            // Equally CRITICAL: Do NOT disconnect PRI_MI2S_RX_Voice Mixer VoiceMMode1 or
+            // VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1 — doing so triggers voc_disable_cvp()
+            // in the kernel and puts the MVM session into VOC_STANDBY (ADSP_ENOTREADY), stopping
+            // uplink encoding. Instead, physical speaker/earpiece/mic are silenced atomically inside
+            // Hexagon CVP via libalsaplay.so (--mute-call / --unmute-call mixer_ctl_set_array)
+            // plus codec/media mixer zeroes below.
             silenceLocalAudio = false,
             mixerSetupCmd = buildString {
-                // Keep modem Voice Rx unmuted so VOC_REC_DL digital downlink capture stays live;
-                // disconnect VoiceMMode1/CSVoice and Media mixers from PRI_MI2S_RX and silence codec
-                // outputs so GM 8 speaker/earpiece stay completely silent.
-                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer VoiceMMode1' 0 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer CSVoice' 0 2>/dev/null; ")
+                // Keep VoiceMMode1 TX/RX BE mixers connected! Cut codec/media speaker paths
+                // (including QUIN_MI2S_RX SmartPA media mixers) and codec ADCs/DEC MUXes only.
                 append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
@@ -1103,12 +1104,10 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia9' 0 2>/dev/null; ")
-                // Keep Voice Tx open for MultiMedia2/9 incall_music injection;
-                // disconnect physical mic (TERT_MI2S_TX) & codec ADCs cleanly.
-                append("tinymix 'Voice Tx Mute' 0 4294967295 500 2>/dev/null; ")
-                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
-                append("tinymix 'VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1' 0 2>/dev/null; ")
-                append("tinymix 'Voice_Tx Mixer TERT_MI2S_TX_Voice' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
+                // Disconnect physical mic codec ADCs cleanly while leaving VoiceMMode1_Tx intact
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
@@ -1121,11 +1120,6 @@ data class DeviceProfile(
                 append("tinymix 'ADC1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC2 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC3 Volume' 0 2>/dev/null; ")
-                // Route Incall_Music front-ends (MM2 for SIM1, MM9 for SIM2) into GSM uplink
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 1 2>/dev/null; ")
                 // In-call capture: downlink only (caller voice), disable uplink echo
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
@@ -1133,9 +1127,7 @@ data class DeviceProfile(
                 append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null")
             },
             mixerRestoreCmd = buildString {
-                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
-                append("tinymix 'Voice Tx Device Mute' 0 4294967295 20 2>/dev/null; ")
-                append("tinymix 'Voice Tx Mute' 0 4294967295 500 2>/dev/null; ")
+                // Atomic Voice Rx/Tx Device Mute & Voice Tx Mute are restored by AlsaPcmPlayback.restoreCallMutes()
                 append("tinymix 'PRI_MI2S_RX_Voice Mixer VoiceMMode1' 1 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX_Voice Mixer CSVoice' 1 2>/dev/null; ")
                 append("tinymix 'VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1' 1 2>/dev/null; ")
@@ -1171,9 +1163,8 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia1' 1 2>/dev/null")
             },
             mixerIncallMusicCmd = buildString {
-                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer VoiceMMode1' 0 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer CSVoice' 0 2>/dev/null; ")
+                // Keep codec/media speaker paths & physical mic ADCs silenced while libalsaplay.so
+                // handles Audio Stream App Type Cfg, Playback Channel Map, Voice Mutes, and Incall_Music.
                 append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
@@ -1183,14 +1174,9 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia9' 0 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 1 2>/dev/null; ")
-                append("tinymix 'Voice Tx Mute' 0 4294967295 500 2>/dev/null; ")
-                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
-                append("tinymix 'VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1' 0 2>/dev/null; ")
-                append("tinymix 'Voice_Tx Mixer TERT_MI2S_TX_Voice' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
@@ -1207,13 +1193,7 @@ data class DeviceProfile(
             mixerCaptureCmd = buildString {
                 // AudioRecord.startRecording() triggers HAL path voice-speaker-dmic-ef &
                 // incall-rec-uplink-and-downlink, which re-enables DEC1/DEC2 mics and VOC_REC_UL.
-                // Re-cut physical mics and uplink echo immediately after capture starts.
-                append("tinymix 'Voice Rx Device Mute' 0 4294967295 20 2>/dev/null; ")
-                append("tinymix 'Voice Tx Device Mute' 1 4294967295 20 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer VoiceMMode1' 0 2>/dev/null; ")
-                append("tinymix 'PRI_MI2S_RX_Voice Mixer CSVoice' 0 2>/dev/null; ")
-                append("tinymix 'VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1' 0 2>/dev/null; ")
-                append("tinymix 'Voice_Tx Mixer TERT_MI2S_TX_Voice' 0 2>/dev/null; ")
+                // Re-cut physical codec ADCs and uplink echo without touching VoiceMMode1 or Incall_Music.
                 append("tinymix 'SPK' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX3 MIX1 INP1' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'RX1 MIX1 INP1' 'ZERO' 2>/dev/null; ")
@@ -1223,6 +1203,9 @@ data class DeviceProfile(
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'PRI_MI2S_RX Audio Mixer MultiMedia9' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia1' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia2' 0 2>/dev/null; ")
+                append("tinymix 'QUIN_MI2S_RX Audio Mixer MultiMedia5' 0 2>/dev/null; ")
                 append("tinymix 'DEC1 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC2 MUX' 'ZERO' 2>/dev/null; ")
                 append("tinymix 'DEC3 MUX' 'ZERO' 2>/dev/null; ")
@@ -1235,26 +1218,22 @@ data class DeviceProfile(
                 append("tinymix 'ADC1 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC2 Volume' 0 2>/dev/null; ")
                 append("tinymix 'ADC3 Volume' 0 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia1' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia2' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music Audio Mixer MultiMedia5' 1 2>/dev/null; ")
-                append("tinymix 'Incall_Music_2 Audio Mixer MultiMedia9' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_DL' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia1 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("tinymix 'MultiMedia8 Mixer VOC_REC_DL' 1 2>/dev/null; ")
                 append("tinymix 'MultiMedia8 Mixer VOC_REC_UL' 0 2>/dev/null; ")
                 append("echo -n 'DEC1='; tinymix 'DEC1 MUX' 2>&1; ")
                 append("echo -n 'DEC2='; tinymix 'DEC2 MUX' 2>&1; ")
-                append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
                 append("echo -n 'IncallMM2='; tinymix 'Incall_Music Audio Mixer MultiMedia2' 2>&1; ")
                 append("echo -n 'VOC_DL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
                 append("echo -n 'VOC_UL='; tinymix 'MultiMedia1 Mixer VOC_REC_UL' 2>&1")
             },
             mixerVerifyCmd = buildString {
-                append("echo -n 'IncallMM1='; tinymix 'Incall_Music Audio Mixer MultiMedia1' 2>&1; ")
                 append("echo -n 'IncallMM2='; tinymix 'Incall_Music Audio Mixer MultiMedia2' 2>&1; ")
+                append("echo -n 'PRI_VoiceMM1='; tinymix 'PRI_MI2S_RX_Voice Mixer VoiceMMode1' 2>&1; ")
+                append("echo -n 'QUIN_VoiceMM1='; tinymix 'QUIN_MI2S_RX_Voice Mixer VoiceMMode1' 2>&1; ")
+                append("echo -n 'TxMM1='; tinymix 'VoiceMMode1_Tx Mixer TERT_MI2S_TX_MMode1' 2>&1; ")
                 append("echo -n 'DEC1='; tinymix 'DEC1 MUX' 2>&1; ")
-                append("echo -n 'DEC2='; tinymix 'DEC2 MUX' 2>&1; ")
                 append("echo -n 'VOC_DL='; tinymix 'MultiMedia1 Mixer VOC_REC_DL' 2>&1; ")
                 append("echo -n 'VOC_UL='; tinymix 'MultiMedia1 Mixer VOC_REC_UL' 2>&1")
             },
@@ -1276,7 +1255,7 @@ data class DeviceProfile(
             playbackStereo = false,
             playbackLowLatency = false,
             playbackBufferMs = 100,
-            primeCaptureBeforePlayback = false,
+            primeCaptureBeforePlayback = true,
             silenceFallback = false,
             playbackFadeIn = false,
             routeChangeDelayMs = 500,

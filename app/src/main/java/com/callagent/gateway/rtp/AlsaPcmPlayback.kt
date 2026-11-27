@@ -112,7 +112,9 @@ class Pcm48kResampler {
  * audio policy lacks an `incall_music_uplink` AudioTrack output (e.g., GM 8 MSM8937).
  *
  * Spawns bundled `libalsaplay.so` under `su` pointing at `/dev/snd/pcmC0D1p`
- * (`MultiMedia2`, SIM 1) or `/dev/snd/pcmC0D16p` (`MultiMedia9`, SIM 2) and writes
+ * (`MultiMedia2`, SIM 1) or `/dev/snd/pcmC0D14p` (`MultiMedia9`, SIM 2), atomically
+ * configures Qualcomm ADM/Q6ASM mixer controls (`Audio Stream App Type Cfg`,
+ * `Playback Channel Map`, atomic voice mute arrays, `Incall_Music`), and writes
  * 48 kHz mono S16_LE frames over stdin.
  */
 class AlsaPcmPlayback(private val context: Context) {
@@ -129,7 +131,7 @@ class AlsaPcmPlayback(private val context: Context) {
 
     fun open(): Boolean {
         if (closed.get()) return false
-        val binPath = resolveBinaryPath()
+        val binPath = resolveBinaryPath(context)
         if (binPath.isNullOrEmpty()) {
             Log.e(TAG, "libalsaplay.so not found in nativeLibraryDir or APK")
             return false
@@ -200,6 +202,15 @@ class AlsaPcmPlayback(private val context: Context) {
             } else {
                 resampler.reset()
                 Log.i(TAG, "Root ALSA uplink READY on card=0 dev=$devId (48kHz mono)")
+                Thread({
+                    try {
+                        Thread.sleep(800)
+                        if (!closed.get()) {
+                            applyCallMutes(context)
+                        }
+                    } catch (_: InterruptedException) {
+                    }
+                }, "alsaplay-remute").apply { isDaemon = true }.start()
                 true
             }
         } catch (e: Exception) {
@@ -272,44 +283,6 @@ class AlsaPcmPlayback(private val context: Context) {
         Log.i(TAG, "Root ALSA uplink closed (dev=$activeDeviceId)")
     }
 
-    private fun resolveBinaryPath(): String? {
-        val nativeDir = context.applicationInfo.nativeLibraryDir
-        if (!nativeDir.isNullOrEmpty()) {
-            val direct = File(nativeDir, BINARY_NAME)
-            if (direct.exists() && direct.canExecute()) {
-                return direct.absolutePath
-            }
-        }
-        return extractBinaryToTmp()
-    }
-
-    private fun extractBinaryToTmp(): String? {
-        val apkPath = context.applicationInfo.sourceDir ?: return null
-        val tmpCache = File(context.cacheDir, BINARY_NAME)
-        val abis = (Build.SUPPORTED_ABIS?.toList().orEmpty() + listOf("arm64-v8a", "armeabi-v7a")).distinct()
-        return try {
-            ZipFile(apkPath).use { zip ->
-                val entry = abis.firstNotNullOfOrNull { abi ->
-                    zip.getEntry("lib/$abi/$BINARY_NAME")
-                } ?: return null
-                zip.getInputStream(entry).use { input ->
-                    FileOutputStream(tmpCache).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
-            RootShell.execForOutput(
-                "cp \"${tmpCache.absolutePath}\" $TMP_BINARY_PATH && chmod 755 $TMP_BINARY_PATH && ls -l $TMP_BINARY_PATH",
-                timeoutMs = 3000
-            )
-            tmpCache.delete()
-            TMP_BINARY_PATH
-        } catch (e: Exception) {
-            Log.w(TAG, "APK binary extraction failed: ${e.message}")
-            null
-        }
-    }
-
     companion object {
         private const val TAG = "AlsaPcmPlayback"
         private const val BINARY_NAME = "libalsaplay.so"
@@ -318,7 +291,65 @@ class AlsaPcmPlayback(private val context: Context) {
         private const val READY_TIMEOUT_MS = 1500L
 
         const val ALSA_DEV_SIM1_MULTIMEDIA2 = 1
-        const val ALSA_DEV_SIM2_MULTIMEDIA9 = 16
+        const val ALSA_DEV_SIM2_MULTIMEDIA9 = 14
+
+        fun resolveBinaryPath(context: Context): String? {
+            val nativeDir = context.applicationInfo.nativeLibraryDir
+            if (!nativeDir.isNullOrEmpty()) {
+                val direct = File(nativeDir, BINARY_NAME)
+                if (direct.exists() && direct.canExecute()) {
+                    return direct.absolutePath
+                }
+            }
+            return extractBinaryToTmp(context)
+        }
+
+        private fun extractBinaryToTmp(context: Context): String? {
+            val apkPath = context.applicationInfo.sourceDir ?: return null
+            val tmpCache = File(context.cacheDir, BINARY_NAME)
+            val abis = (Build.SUPPORTED_ABIS?.toList().orEmpty() + listOf("arm64-v8a", "armeabi-v7a")).distinct()
+            return try {
+                ZipFile(apkPath).use { zip ->
+                    val entry = abis.firstNotNullOfOrNull { abi ->
+                        zip.getEntry("lib/$abi/$BINARY_NAME")
+                    } ?: return null
+                    zip.getInputStream(entry).use { input ->
+                        FileOutputStream(tmpCache).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+                RootShell.execForOutput(
+                    "cp \"${tmpCache.absolutePath}\" $TMP_BINARY_PATH && chmod 755 $TMP_BINARY_PATH && ls -l $TMP_BINARY_PATH",
+                    timeoutMs = 3000
+                )
+                tmpCache.delete()
+                TMP_BINARY_PATH
+            } catch (e: Exception) {
+                Log.w(TAG, "APK binary extraction failed: ${e.message}")
+                null
+            }
+        }
+
+        fun applyCallMutes(context: Context) {
+            val binPath = resolveBinaryPath(context) ?: return
+            runCatching {
+                val out = RootShell.execForOutput("\"$binPath\" -D 0 --mute-call", timeoutMs = 2000)
+                Log.i(TAG, "Atomic call mutes: $out")
+            }.onFailure { e ->
+                Log.w(TAG, "Atomic call mutes failed: ${e.message}")
+            }
+        }
+
+        fun restoreCallMutes(context: Context) {
+            val binPath = resolveBinaryPath(context) ?: return
+            runCatching {
+                val out = RootShell.execForOutput("\"$binPath\" -D 0 --unmute-call", timeoutMs = 2000)
+                Log.i(TAG, "Atomic call unmute: $out")
+            }.onFailure { e ->
+                Log.w(TAG, "Atomic call unmute failed: ${e.message}")
+            }
+        }
 
         fun selectDeviceId(pcm35Status: String?): Int {
             return if (pcm35Status?.contains("RUNNING", ignoreCase = true) == true) {
@@ -330,9 +361,9 @@ class AlsaPcmPlayback(private val context: Context) {
 
         fun periodConfigForDevice(devId: Int): Pair<Int, Int> {
             return if (devId == ALSA_DEV_SIM2_MULTIMEDIA9) {
-                960 to 2 // pcmC0D16p (MultiMedia9) hardware requires period_size in 512..2048, period_count in 2..4
+                960 to 2 // pcmC0D14p (MultiMedia9) period_size 960, period_count 2
             } else {
-                240 to 4 // pcmC0D1p (MultiMedia2) 5ms periods @ 48kHz
+                240 to 2 // pcmC0D1p (MultiMedia2) matches vendor HAL pcm_config_incall_music
             }
         }
     }

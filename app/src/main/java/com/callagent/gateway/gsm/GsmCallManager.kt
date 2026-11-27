@@ -22,6 +22,7 @@ import android.telephony.TelephonyManager
 import android.util.Log
 import com.callagent.gateway.DeviceProfile
 import com.callagent.gateway.RootShell
+import com.callagent.gateway.rtp.AlsaPcmPlayback
 
 /**
  * GSM call manager: answers/makes/hangs up GSM calls, tracks state.
@@ -44,6 +45,8 @@ object GsmCallManager {
 
     /** Active device profile — initialized on first use. */
     val profile: DeviceProfile by lazy { DeviceProfile.detect() }
+
+    @Volatile private var appContext: Context? = null
 
     // Current active GSM call
     @Volatile var activeCall: Call? = null; private set
@@ -764,6 +767,7 @@ object GsmCallManager {
             runMixerDiscovery()
 
             inCallService?.let { service ->
+                appContext = service.applicationContext
                 val audioManager = service.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
                 // Samsung HAL params (incall_music_enabled, g_call_path, etc.)
@@ -993,6 +997,10 @@ object GsmCallManager {
             val setupOutput = RootShell.execForOutput(resolvedSetup, timeoutMs = 8000)
             if (setupOutput.isNotBlank()) appLog("Mixer setup: $setupOutput")
 
+            if (profile.useRootAlsaPlayback) {
+                (inCallService?.applicationContext ?: appContext)?.let { AlsaPcmPlayback.applyCallMutes(it) }
+            }
+
             if (verify.isNotEmpty()) {
                 appLog("Mixer AFTER: ${RootShell.execForOutput(verify, timeoutMs = 10000)}")
             }
@@ -1014,6 +1022,9 @@ object GsmCallManager {
         }
         try {
             RootShell.exec(resolvedRestore)
+            if (profile.useRootAlsaPlayback) {
+                (inCallService?.applicationContext ?: appContext)?.let { AlsaPcmPlayback.restoreCallMutes(it) }
+            }
             appLog("Mixer restored")
         } catch (e: Exception) {
             appLog("Mixer restore FAILED: ${e.message}")
