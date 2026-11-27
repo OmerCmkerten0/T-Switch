@@ -331,10 +331,12 @@ object LocalSendController {
                 return when {
                     lowerArgs.startsWith("sifre ") || lowerArgs.startsWith("şifre ") || lowerArgs.startsWith("pass ") -> {
                         val pw = restArgs.substringAfter(' ').trim()
-                        if (pw.isEmpty()) "⚠️ Kullanım: `!push sifre <t-switch_pusher_sifresi>`"
+                        if (pw.isEmpty()) "⚠️ Kullanım: `!push sifre <sip_sifresi>`"
                         else {
                             PushWakeController.setPassword(context, pw)
-                            "✅ `t-switch_pusher@sip.linphone.org` şifresi kaydedildi ve Hibrit Apple PushKit AKTİF edildi!\nTest için `!push test` yazabilirsiniz."
+                            val pusher = PushWakeController.getPusherUser(context).ifBlank { "gönderici" }
+                            val domain = PushWakeController.getDomain(context)
+                            "✅ `$pusher@$domain` şifresi kaydedildi ve Hibrit Apple PushKit AKTİF edildi!\nTest için `!push test` yazabilirsiniz."
                         }
                     }
                     lowerArgs == "ac" || lowerArgs == "aç" || lowerArgs == "on" -> {
@@ -347,10 +349,12 @@ object LocalSendController {
                     }
                     lowerArgs == "test" -> {
                         if (!PushWakeController.isConfigured(context)) {
-                            "⚠️ Önce şifreyi girin: `!push sifre <t-switch_pusher_sifresi>`"
+                            "⚠️ Önce Ayarlar'dan gönderici/alıcı SIP hesaplarını ve şifreyi girin (veya `!push sifre <sip_sifresi>`)."
                         } else {
+                            val receiver = PushWakeController.getReceiverUser(context)
+                            val domain = PushWakeController.getDomain(context)
                             PushWakeController.triggerWakeAsync(context, "T-Switch Test", holdMs = 5_000L)
-                            "🔔 `t-switch_receiver@sip.linphone.org` adresine 5 sn'lik Apple PushKit uyandırma testi gönderildi!"
+                            "🔔 `$receiver@$domain` adresine 5 sn'lik Apple PushKit uyandırma testi gönderildi!"
                         }
                     }
                     else -> PushWakeController.statusReport(context)

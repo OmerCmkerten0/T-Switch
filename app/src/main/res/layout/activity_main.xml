@@ -227,7 +227,7 @@
                         android:id="@+id/tvDashPushState"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="PushKit: t-switch_pusher → t-switch_receiver@sip.linphone.org"
+                        android:text="PushKit: Yapılandırma bekleniyor"
                         android:textSize="11sp"
                         android:fontFamily="monospace"
                         android:textColor="@color/text_secondary"
@@ -239,7 +239,7 @@
                         android:id="@+id/tvDashSimBattery"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="SIM &amp; Pil: Turkcell LTE · +905319004158"
+                        android:text="SIM &amp; Pil: Bekleniyor…"
                         android:textSize="11sp"
                         android:fontFamily="monospace"
                         android:textColor="@color/text_secondary"
@@ -916,7 +916,7 @@
                             <TextView
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:text="iPhone ekranı kilitliyken gelen GSM aramasında GM 8 (t-switch_pusher) → iPhone (t-switch_receiver@sip.linphone.org) üzerinden Apple PushKit uyandırma sinyali gönderir; iPhone uyanınca sesi yerel ağdan (tswitch.local) taşır."
+                                android:text="iPhone ekranı kilitliyken gelen GSM aramasında GM 8 gönderici SIP hesabı üzerinden iPhone alıcı SIP hesabına Apple PushKit uyandırma sinyali gönderir."
                                 android:textSize="11sp"
                                 android:textColor="@color/text_hint"
                                 android:paddingBottom="8dp" />
@@ -937,27 +937,25 @@
                                 android:text="sip.linphone.org"
                                 android:inputType="textUri" />
 
-                            <TextView style="@style/CfgLabel" android:text="GM 8 Gönderici Hesabı (Pusher)" />
+                            <TextView style="@style/CfgLabel" android:text="Gateway Gönderici Hesabı (Pusher)" />
                             <EditText
                                 android:id="@+id/etCfgPushPusher"
                                 style="@style/CfgField"
-                                android:hint="t-switch_pusher"
-                                android:text="t-switch_pusher"
+                                android:hint="gonderici_sip_kullanici"
                                 android:inputType="text" />
 
-                            <TextView style="@style/CfgLabel" android:text="t-switch_pusher Şifresi (sip.linphone.org)" />
+                            <TextView style="@style/CfgLabel" android:text="Gönderici SIP Şifresi" />
                             <EditText
                                 android:id="@+id/etCfgPushPass"
                                 style="@style/CfgField"
-                                android:hint="t-switch_pusher şifresini girin"
+                                android:hint="SIP hesap şifresini girin"
                                 android:inputType="textPassword" />
 
                             <TextView style="@style/CfgLabel" android:text="iPhone Alıcı Hesabı (Receiver)" />
                             <EditText
                                 android:id="@+id/etCfgPushReceiver"
                                 style="@style/CfgField"
-                                android:hint="t-switch_receiver"
-                                android:text="t-switch_receiver"
+                                android:hint="alici_sip_kullanici"
                                 android:inputType="text" />
 
                             <LinearLayout
@@ -1104,7 +1102,7 @@
 
                         <TextView style="@style/CfgLabel" android:text="SIP Username" />
                         <EditText android:id="@+id/etCfgUser" style="@style/CfgField"
-                            android:hint="t-switch_pusher" android:inputType="text" />
+                            android:hint="sip_kullanici" android:inputType="text" />
 
                         <TextView style="@style/CfgLabel" android:text="SIP Password" />
                         <EditText android:id="@+id/etCfgPass" style="@style/CfgField"

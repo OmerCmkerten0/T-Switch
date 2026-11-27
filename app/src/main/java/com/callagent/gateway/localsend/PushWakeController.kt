@@ -18,23 +18,23 @@ import kotlin.concurrent.thread
 /**
  * Hybrid PushKit Wake & Cloud Call Leg Controller.
  *
- * Uses `t-switch_pusher@sip.linphone.org` to send a SIP INVITE to
- * `t-switch_receiver@sip.linphone.org` whenever an incoming GSM call cannot reach
+ * Uses the configured gateway (pusher) SIP account to send a SIP INVITE to
+ * the configured iPhone (receiver) SIP account whenever an incoming GSM call cannot reach
  * Linphone over the local network immediately (e.g. iPhone screen locked or
  * app suspended/killed), or to originate an iPhone-first cloud callback.
  *
  * Supports both:
  * 1. Wake-only PushKit pings (`wakeOnly = true`) used in custom SIP mode or tests —
  *    never bridges its own media leg and immediately ACKs + sends in-dialog BYE on 200 OK.
- * 2. Full SIP call bridging over `sip.linphone.org` (`wakeOnly = false`) — bounded STUN
+ * 2. Full SIP call bridging over TLS (`wakeOnly = false`) — bounded STUN
  *    discovery on an ephemeral socket, RFC 3261 `Record-Route`/`Route` `ACK` & `BYE`,
  *    in-dialog `re-INVITE` RTP handover, and bidirectional RTP handoff to `CallOrchestrator`.
  */
 object PushWakeController {
     private const val TAG = "PushWakeController"
     const val DEFAULT_DOMAIN = "sip.linphone.org"
-    const val DEFAULT_PUSHER_USER = "t-switch_pusher"
-    const val DEFAULT_RECEIVER_USER = "t-switch_receiver"
+    const val DEFAULT_PUSHER_USER = ""
+    const val DEFAULT_RECEIVER_USER = ""
 
     private const val PREF_ENABLED = "push_wake_enabled"
     private const val PREF_DOMAIN = "push_domain"
@@ -202,14 +202,6 @@ object PushWakeController {
             ed.putString(PREF_DOMAIN, DEFAULT_DOMAIN)
             changed = true
         }
-        if (prefs.getString(PREF_PUSHER_USER, "").isNullOrBlank()) {
-            ed.putString(PREF_PUSHER_USER, DEFAULT_PUSHER_USER)
-            changed = true
-        }
-        if (prefs.getString(PREF_RECEIVER_USER, "").isNullOrBlank()) {
-            ed.putString(PREF_RECEIVER_USER, DEFAULT_RECEIVER_USER)
-            changed = true
-        }
         if (!prefs.contains(PREF_ENABLED)) {
             ed.putBoolean(PREF_ENABLED, true)
             changed = true
@@ -234,14 +226,16 @@ object PushWakeController {
         ensureDefaults(context)
         return context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
             .getString(PREF_PUSHER_USER, DEFAULT_PUSHER_USER)
-            ?.takeIf { it.isNotBlank() } ?: DEFAULT_PUSHER_USER
+            .orEmpty()
+            .trim()
     }
 
     fun getReceiverUser(context: Context): String {
         ensureDefaults(context)
         return context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
             .getString(PREF_RECEIVER_USER, DEFAULT_RECEIVER_USER)
-            ?.takeIf { it.isNotBlank() } ?: DEFAULT_RECEIVER_USER
+            .orEmpty()
+            .trim()
     }
 
     fun getPassword(context: Context): String =
@@ -252,6 +246,8 @@ object PushWakeController {
         ensureDefaults(context)
         val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
         return prefs.getBoolean(PREF_ENABLED, true) &&
+            !prefs.getString(PREF_PUSHER_USER, "").isNullOrBlank() &&
+            !prefs.getString(PREF_RECEIVER_USER, "").isNullOrBlank() &&
             !prefs.getString(PREF_PUSHER_PASS, "").isNullOrBlank()
     }
 
@@ -266,9 +262,9 @@ object PushWakeController {
         context.getSharedPreferences("gateway", Context.MODE_PRIVATE).edit()
             .putBoolean(PREF_ENABLED, enabled)
             .putString(PREF_DOMAIN, domain.trim().ifEmpty { DEFAULT_DOMAIN })
-            .putString(PREF_PUSHER_USER, pusherUser.trim().ifEmpty { DEFAULT_PUSHER_USER })
+            .putString(PREF_PUSHER_USER, pusherUser.trim())
             .putString(PREF_PUSHER_PASS, pusherPass.trim())
-            .putString(PREF_RECEIVER_USER, receiverUser.trim().ifEmpty { DEFAULT_RECEIVER_USER })
+            .putString(PREF_RECEIVER_USER, receiverUser.trim())
             .apply()
     }
 
@@ -294,13 +290,17 @@ object PushWakeController {
         val domain = getDomain(context)
         val pusher = getPusherUser(context)
         val receiver = getReceiverUser(context)
+        val hasUsers = pusher.isNotBlank() && receiver.isNotBlank()
         val hasPass = !prefs.getString(PREF_PUSHER_PASS, "").isNullOrBlank()
         val stateBadge = when {
-            enabled && hasPass -> "Aktif ✅"
+            enabled && hasUsers && hasPass -> "Aktif ✅"
+            enabled && !hasUsers -> "Hesap Girin ⚠️"
             enabled && !hasPass -> "Şifre Bekleniyor ⚠️"
             else -> "Kapalı"
         }
-        return "$pusher → $receiver@$domain ($stateBadge)"
+        val pusherLabel = pusher.ifBlank { "gönderici" }
+        val receiverLabel = receiver.ifBlank { "alıcı" }
+        return "$pusherLabel → $receiverLabel@$domain ($stateBadge)"
     }
 
     fun statusReport(context: Context): String {
@@ -310,13 +310,21 @@ object PushWakeController {
         val domain = getDomain(context)
         val pusher = getPusherUser(context)
         val receiver = getReceiverUser(context)
+        val hasUsers = pusher.isNotBlank() && receiver.isNotBlank()
         val hasPass = !prefs.getString(PREF_PUSHER_PASS, "").isNullOrBlank()
+
+        val statusLabel = when {
+            !enabled -> "KAPALI"
+            !hasUsers -> "HESAP EKSİK ⚠️"
+            !hasPass -> "ŞİFRE EKSİK ⚠️"
+            else -> "AKTİF ✅"
+        }
 
         return buildString {
             appendLine("🔔 [Hibrit Apple PushKit Durumu]")
-            appendLine("• Durum   : ${if (enabled && hasPass) "AKTİF ✅" else if (!hasPass) "ŞİFRE EKSİK ⚠️" else "KAPALI"}")
-            appendLine("• Gönderen: $pusher@$domain")
-            appendLine("• Alıcı   : $receiver@$domain")
+            appendLine("• Durum   : $statusLabel")
+            appendLine("• Gönderen: ${if (pusher.isNotBlank()) "$pusher@$domain" else "Girilmedi ❌"}")
+            appendLine("• Alıcı   : ${if (receiver.isNotBlank()) "$receiver@$domain" else "Girilmedi ❌"}")
             appendLine("• Şifre   : ${if (hasPass) "Kayıtlı ✅" else "Girilmedi ❌"}")
             append("Komutlar: `!push sifre <parola>` | `!push test` | `!push ac/kapat`")
         }
@@ -479,11 +487,11 @@ object PushWakeController {
     ) {
         val prefs = context.getSharedPreferences("gateway", Context.MODE_PRIVATE)
         val domain = prefs.getString(PREF_DOMAIN, DEFAULT_DOMAIN)?.takeIf { it.isNotBlank() } ?: DEFAULT_DOMAIN
-        val pusher = prefs.getString(PREF_PUSHER_USER, DEFAULT_PUSHER_USER)?.takeIf { it.isNotBlank() } ?: DEFAULT_PUSHER_USER
-        val receiver = prefs.getString(PREF_RECEIVER_USER, DEFAULT_RECEIVER_USER)?.takeIf { it.isNotBlank() } ?: DEFAULT_RECEIVER_USER
+        val pusher = prefs.getString(PREF_PUSHER_USER, "").orEmpty().trim()
+        val receiver = prefs.getString(PREF_RECEIVER_USER, "").orEmpty().trim()
         val password = prefs.getString(PREF_PUSHER_PASS, "").orEmpty()
-        if (password.isBlank()) {
-            onStatus?.invoke("⚠️ t-switch_pusher şifresi girilmedi")
+        if (pusher.isBlank() || receiver.isBlank() || password.isBlank()) {
+            onStatus?.invoke("⚠️ SIP PushKit hesap bilgileri (gönderici, alıcı veya şifre) eksik")
             return
         }
 
@@ -656,7 +664,7 @@ object PushWakeController {
                         )
                         runCatching { transport.send(ackErr, domain, 5061) }
                         Log.w(TAG, "PushKit auth rejected ($code) for $pusher@$domain")
-                        onStatus?.invoke("❌ Şifre reddedildi ($code) — t-switch_pusher şifresini kontrol edin")
+                        onStatus?.invoke("❌ Şifre reddedildi ($code) — $pusher@$domain şifresini kontrol edin")
                         if (!wakeCancelled.get()) {
                             effOnRejectedOrEnded?.invoke(code, "PushKit şifre hatası ($code)")
                         }

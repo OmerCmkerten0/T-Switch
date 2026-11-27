@@ -55,7 +55,7 @@ class GatewayPortResolutionTest {
             localSendMode = true
         )
         val cloudTls = SipClient(
-            username = "t-switch_pusher",
+            username = "gateway_user",
             password = "secret",
             serverDomain = "sip.linphone.org",
             serverPort = 5061,
@@ -103,36 +103,36 @@ class GatewayPortResolutionTest {
         assertTrue(
             "Exact paired user on allowed domain must be accepted",
             GatewayService.isAuthorizedCloudSmsSender(
-                fromUser = "t-switch_receiver",
+                fromUser = "receiver_user",
                 fromDomain = "sip.linphone.org",
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )
         assertTrue(
             "Case-insensitive user and domain match must be accepted",
             GatewayService.isAuthorizedCloudSmsSender(
-                fromUser = "T-Switch_Receiver",
+                fromUser = "Receiver_User",
                 fromDomain = "SIP.LINPHONE.ORG",
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )
         assertFalse(
-            "Federated spoofed domain t-switch_receiver@evil.com must be rejected",
+            "Federated spoofed domain receiver_user@evil.com must be rejected",
             GatewayService.isAuthorizedCloudSmsSender(
-                fromUser = "t-switch_receiver",
+                fromUser = "receiver_user",
                 fromDomain = "evil.com",
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )
         assertFalse(
             "Subdomain spoofing must be rejected",
             GatewayService.isAuthorizedCloudSmsSender(
-                fromUser = "t-switch_receiver",
+                fromUser = "receiver_user",
                 fromDomain = "sip.linphone.org.evil.com",
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )
@@ -141,16 +141,16 @@ class GatewayPortResolutionTest {
             GatewayService.isAuthorizedCloudSmsSender(
                 fromUser = "attacker",
                 fromDomain = "sip.linphone.org",
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )
         assertFalse(
             "Missing domain or user must be rejected",
             GatewayService.isAuthorizedCloudSmsSender(
-                fromUser = "t-switch_receiver",
+                fromUser = "receiver_user",
                 fromDomain = null,
-                pairedReceiverUser = "t-switch_receiver",
+                pairedReceiverUser = "receiver_user",
                 allowedDomains = allowed
             )
         )

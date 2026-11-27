@@ -8,8 +8,8 @@ import org.junit.Test
 class CommandAuthorizationTest {
 
     private val allowedDomains = setOf("sip.linphone.org", "custom.sip.example")
-    private val gatewayUser = "t-switch_pusher"
-    private val pairedReceiver = "t-switch_receiver"
+    private val gatewayUser = "gateway_user"
+    private val pairedReceiver = "receiver_user"
 
     @Test
     fun phoneNumberTargetWithDollarOrBangIsAlwaysDirectGsmSms() {
@@ -334,8 +334,8 @@ class CommandAuthorizationTest {
 
     @Test
     fun decodeMessageBodyUnwrapsLinphoneCpimAndIgnoresControlMessages() {
-        val cpim = "From: <sip:t-switch_receiver@sip.linphone.org>\r\n" +
-            "To: <sip:t-switch_pusher@sip.linphone.org>\r\n" +
+        val cpim = "From: <sip:receiver_user@sip.linphone.org>\r\n" +
+            "To: <sip:gateway_user@sip.linphone.org>\r\n" +
             "DateTime: 2026-11-24T20:40:00Z\r\n" +
             "\r\n" +
             "Content-Type: text/plain; charset=utf-8\r\n" +

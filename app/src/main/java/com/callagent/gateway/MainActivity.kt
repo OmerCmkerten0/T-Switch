@@ -562,6 +562,7 @@ class MainActivity : AppCompatActivity() {
         val isHybrid = decision.mode == RoutingMode.HYBRID_LOCAL_IP
         val isCloudOnly = decision.mode == RoutingMode.CLOUD_ONLY_LINPHONE
         val user = prefs.getString("user", "").orEmpty().trim()
+        if (isCloudOnly && !com.callagent.gateway.localsend.PushWakeController.isConfigured(this)) return
         if (!isHybrid && !isCloudOnly && (decision.customServer.isEmpty() || user.isEmpty())) return
         val pass = prefs.getString("pass", "").orEmpty()
         GatewayService.start(
@@ -853,6 +854,8 @@ class MainActivity : AppCompatActivity() {
                 startService(Intent(this, GatewayService::class.java).apply {
                     action = GatewayService.ACTION_APPLY_CONFIG
                 })
+            } else {
+                autoStartGateway()
             }
             Toast.makeText(this, "Linphone PushKit bilgileri kaydedildi", Toast.LENGTH_SHORT).show()
         }
@@ -864,15 +867,17 @@ class MainActivity : AppCompatActivity() {
             if (!com.callagent.gateway.localsend.PushWakeController.isConfigured(this)) {
                 Toast.makeText(
                     this,
-                    "Önce t-switch_pusher@sip.linphone.org şifresini girin",
+                    "Önce gönderici SIP hesabı, şifresi ve alıcı hesabını girin",
                     Toast.LENGTH_LONG
                 ).show()
-                findViewById<EditText>(R.id.etCfgPushPass)?.requestFocus()
+                findViewById<EditText>(R.id.etCfgPushPusher)?.requestFocus()
             } else {
-                appendLog("PushKit Test: t-switch_receiver@sip.linphone.org uyandırılıyor (10sn)")
+                val receiver = com.callagent.gateway.localsend.PushWakeController.getReceiverUser(this)
+                val domain = com.callagent.gateway.localsend.PushWakeController.getDomain(this)
+                appendLog("PushKit Test: $receiver@$domain uyandırılıyor (10sn)")
                 Toast.makeText(
                     this,
-                    "sip.linphone.org üzerinden PushKit sinyali gönderiliyor…",
+                    "$domain üzerinden PushKit sinyali gönderiliyor…",
                     Toast.LENGTH_SHORT
                 ).show()
                 com.callagent.gateway.localsend.PushWakeController.triggerWakeAsync(
@@ -923,10 +928,16 @@ class MainActivity : AppCompatActivity() {
         val badge = findViewById<TextView>(R.id.tvCfgPushStatusBadge) ?: return
         val enabled = com.callagent.gateway.localsend.PushWakeController.isEnabled(this)
         val configured = com.callagent.gateway.localsend.PushWakeController.isConfigured(this)
+        val hasUsers = com.callagent.gateway.localsend.PushWakeController.getPusherUser(this).isNotBlank() &&
+            com.callagent.gateway.localsend.PushWakeController.getReceiverUser(this).isNotBlank()
         when {
             configured -> {
                 badge.text = "Aktif ✅"
                 badge.setTextColor(Color.parseColor("#34D399"))
+            }
+            enabled && !hasUsers -> {
+                badge.text = "Hesap Girin ⚠️"
+                badge.setTextColor(Color.parseColor("#FBBF24"))
             }
             enabled -> {
                 badge.text = "Şifre Girin ⚠️"

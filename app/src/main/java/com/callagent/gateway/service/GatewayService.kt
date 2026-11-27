@@ -2555,7 +2555,7 @@ class GatewayService : Service() {
         /**
          * Validates that a public-cloud `DirectGsmSms` sender matches BOTH the
          * paired receiver SIP username and one of the allowed cloud SIP domains,
-         * blocking federated SIP domain spoofing (e.g. `t-switch_receiver@evil.com`).
+         * blocking federated SIP domain spoofing (e.g. `receiver_user@evil.com`).
          */
         fun isAuthorizedCloudSmsSender(
             fromUser: String?,

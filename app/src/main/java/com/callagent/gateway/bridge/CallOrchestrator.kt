@@ -304,7 +304,7 @@ class CallOrchestrator(
 
     /**
      * iPhone-first Cloud Callback:
-     * Calls `t-switch_receiver` via PushWakeController first; only after iPhone answers (200 OK)
+     * Calls the configured receiver SIP account via PushWakeController first; only after iPhone answers (200 OK)
      * do we start RTP on `"RTP-Start"` and dial [destNumber] over GSM. If iPhone rejects or
      * times out, GSM is never dialed.
      */

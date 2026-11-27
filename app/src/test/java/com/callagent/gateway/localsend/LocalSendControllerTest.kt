@@ -24,7 +24,7 @@ class LocalSendControllerTest {
     }
 
     private fun cloudClient(domain: String = "sip.linphone.org"): SipClient = SipClient(
-        username = "t-switch_pusher",
+        username = "gateway_user",
         password = "secret",
         serverDomain = domain,
         serverPort = 5061,
