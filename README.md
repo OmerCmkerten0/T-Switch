@@ -24,19 +24,19 @@ SIM kartınız yedek Android telefonda kalsın; tüm aramalarınızı ve SMS'ler
 <table>
   <tr>
     <td align="center">
-      <img src="docs/images/preview-home.svg" width="235" alt="T-Switch Ana Panel" /><br/>
-      <b>1. Ana Panel &amp; Aktif Çağrı</b><br/>
-      <sub>Canlı sistem durumu, GSM/Wi-Fi, aktif dijital köprü ve çağrı/SMS geçmişi</sub>
+      <img src="docs/images/screen-home.png" width="235" alt="T-Switch Ana Ekran" /><br/>
+      <b>1. Ana Ekran &amp; Canlı Sistem Paneli</b><br/>
+      <sub>Kayıt/TLS durumu, LTE &amp; Wi-Fi sinyali, PushKit özeti ve çağrı/SMS geçmişi</sub>
     </td>
     <td align="center">
-      <img src="docs/images/preview-settings.svg" width="235" alt="T-Switch Ayarlar ve PushKit" /><br/>
+      <img src="docs/images/screen-settings.png" width="235" alt="T-Switch Ayarlar ve PushKit" /><br/>
       <b>2. Ayarlar &amp; Linphone PushKit</b><br/>
-      <sub>Kiosk/Debloat otomasyonu, SIP/PushKit hesapları ve ses kodek ayarları</sub>
+      <sub>Apple PushKit uyandırıcı, SIP hesap ayarları ve tek tık PushKit testi</sub>
     </td>
     <td align="center">
-      <img src="docs/images/preview-terminal.svg" width="235" alt="T-Switch Terminal" /><br/>
-      <b>3. iPhone Linphone Terminali</b><br/>
-      <sub><code>!ara</code>, <code>!sms</code>, <code>!geneldurum</code> komutları ve gelen SMS aktarımı</sub>
+      <img src="docs/images/screen-dialer.png" width="235" alt="T-Switch Tuş Takımı" /><br/>
+      <b>3. Telefon &amp; SMS Tuş Takımı</b><br/>
+      <sub>Doğrudan GSM arama, hızlı SMS gönderimi ve alt gezinme çubuğu</sub>
     </td>
   </tr>
 </table>
