@@ -23,7 +23,7 @@ LATESTARTSERVICE=false
 # Show version
 MOD_VER=$(grep '^version=' "$MODPATH/../module.prop" 2>/dev/null | cut -d= -f2)
 [ -z "$MOD_VER" ] && MOD_VER=$(unzip -p "$ZIPFILE" module.prop 2>/dev/null | grep '^version=' | cut -d= -f2)
-ui_print "- SIP-GSM Gateway Magisk Module ${MOD_VER:-unknown}"
+ui_print "- T-Switch Magisk Module ${MOD_VER:-unknown}"
 ui_print ""
 
 # Extract module files
@@ -43,7 +43,7 @@ if [ -f "$PRIV_APK" ]; then
 else
     ui_print "- APK not in module, searching installed apps..."
     # Find the APK installed via 'adb install' or Play Store
-    APK_PATH=$(pm path com.callagent.gateway 2>/dev/null | head -1 | sed 's/^package://')
+    APK_PATH=$(pm path com.tnoktasi.tswitch 2>/dev/null | head -1 | sed 's/^package://')
     if [ -n "$APK_PATH" ] && [ -f "$APK_PATH" ]; then
         mkdir -p "$PRIV_DIR"
         cp "$APK_PATH" "$PRIV_APK"
@@ -138,7 +138,7 @@ fi
 rm -f "$MODPATH/skip_mount"
 
 ui_print ""
-ui_print "- SIP-GSM Gateway installed as priv-app"
+ui_print "- T-Switch installed as priv-app"
 ui_print "- Privileged permissions configured:"
 ui_print "    CAPTURE_AUDIO_OUTPUT, MODIFY_PHONE_STATE,"
 ui_print "    READ_PRIVILEGED_PHONE_STATE, CALL_PRIVILEGED"

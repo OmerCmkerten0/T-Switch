@@ -1,6 +1,6 @@
-id=sip-gsm-gateway
+id=tswitch
 name=T-Noktası Gsm Call Switcher (T-Switch)
 version=v1.4.14
 versionCode=377
 author=T-Noktası
-description=T-Noktası Gsm Call Switcher (T-Switch) — Priv-app permissions, Local Send Hotspot SIP bridge, auto-grant runtime permissions & audio routing
+description=T-Noktası Gsm Call Switcher (T-Switch) — Priv-app permissions, PushKit & Local Send SIP bridge, auto-grant runtime permissions & audio routing

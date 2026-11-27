@@ -9,17 +9,17 @@
 # Also logs CAPTURE_AUDIO_OUTPUT grant status for debugging.
 
 MODDIR="${0%/*}"
-TAG="GatewayMagisk"
+TAG="TSwitchMagisk"
 
 MOD_VER=$(grep '^version=' "$MODDIR/module.prop" 2>/dev/null | cut -d= -f2)
-log -t "$TAG" "SIP-GSM Gateway Magisk Module ${MOD_VER:-unknown} — service.sh running"
+log -t "$TAG" "T-Switch Magisk Module ${MOD_VER:-unknown} — service.sh running"
 
-PRIV_DIR="$MODDIR/system/priv-app/Gateway"
-PRIV_APK="$PRIV_DIR/Gateway.apk"
+PRIV_DIR="$MODDIR/system/priv-app/TSwitch"
+PRIV_APK="$PRIV_DIR/TSwitch.apk"
 
 # ── Sync APK ──────────────────────────────────────────
 # pm path returns the currently-active APK (may be /data/app/ update)
-APK_PATH=$(pm path com.callagent.gateway 2>/dev/null | head -1 | sed 's/^package://')
+APK_PATH=$(pm path com.tnoktasi.tswitch 2>/dev/null | head -1 | sed 's/^package://')
 
 if [ -n "$APK_PATH" ] && [ -f "$APK_PATH" ]; then
     if [ ! -f "$PRIV_APK" ]; then
@@ -107,7 +107,7 @@ seed_su_policy() {
 # ── Grant runtime permissions automatically ───────────
 # These normally require user approval via UI prompts.
 # Granting them here avoids manual setup on a headless gateway.
-PKG="com.callagent.gateway"
+PKG="com.tnoktasi.tswitch"
 (
 wait_for_pm
 seed_su_policy

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.callagent.gateway"
+    namespace = "com.tnoktasi.tswitch"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.callagent.gateway"
+        applicationId = "com.tnoktasi.tswitch"
         minSdk = 26
         targetSdk = 34
         versionCode = 455

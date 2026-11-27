@@ -1,0 +1,45 @@
+[35mapp/src/main/java/com/callagent/gateway/bridge/CallOrchestrator.kt[m[36m:[m[32m307[m[36m:[m     * Calls `[1;31mt-switch_receiver[m` via PushWakeController first; only after iPhone answers (200 OK)
+[35mapp/src/main/java/com/callagent/gateway/service/GatewayService.kt[m[36m:[m[32m2558[m[36m:[m         * blocking federated SIP domain spoofing (e.g. `[1;31mt-switch_receiver[m@evil.com`).
+[35mapp/src/test/java/com/callagent/gateway/localsend/LocalSendControllerTest.kt[m[36m:[m[32m27[m[36m:[m        username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m58[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m106[m[36m:[m                fromUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m108[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m117[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m122[m[36m:[m            "Federated spoofed domain [1;31mt-switch_receiver[m@evil.com must be rejected",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m124[m[36m:[m                fromUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m126[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m133[m[36m:[m                fromUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m135[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m144[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m151[m[36m:[m                fromUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/service/GatewayPortResolutionTest.kt[m[36m:[m[32m153[m[36m:[m                pairedReceiverUser = "[1;31mt-switch_receiver[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipAuthTest.kt[m[36m:[m[32m17[m[36m:[m            append("From: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=from1\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipAuthTest.kt[m[36m:[m[32m38[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipAuthTest.kt[m[36m:[m[32m54[m[36m:[m            append("From: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=from2\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipAuthTest.kt[m[36m:[m[32m55[m[36m:[m            append("To: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=to2\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipAuthTest.kt[m[36m:[m[32m73[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m25[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m30[m[36m:[m        assertEquals("[1;31mt-switch_pusher[m", fromUserNoName)
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m35[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m40[m[36m:[m        assertEquals("[1;31mt-switch_pusher[m", fromUserBlankName)
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m45[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m50[m[36m:[m        assertEquals("[1;31mt-switch_pusher[m", fromUserWithName)
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m55[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m68[m[36m:[m            invite.contains("From: \"+905551234567\" <sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=gw123\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m131[m[36m:[m            fromHeader = "<sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=local1",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m134[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m148[m[36m:[m            fromHeader = "<sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=local1",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m152[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipClientProtocolTest.kt[m[36m:[m[32m212[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m20[m[36m:[m            append("INVITE sip:[1;31mt-switch_pusher[m@10.0.0.5:45123;transport=tls SIP/2.0\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m26[m[36m:[m            append("To: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>\r\n")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m51[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m71[m[36m:[m            username = "[1;31mt-switch_pusher[m",
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m82[m[36m:[m            reg.contains("From: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>;tag=")
+[35mapp/src/test/java/com/callagent/gateway/sip/SipMessageTest.kt[m[36m:[m[32m86[m[36m:[m            reg.contains("From: <sip:[1;31mt-switch_pusher[m@10.0.0.5>")
+[35mapp/src/test/java/com/callagent/gateway/sip/TlsFrameBufferTest.kt[m[36m:[m[32m110[m[36m:[m        val cpim = "From: <sip:[1;31mt-switch_receiver[m@sip.linphone.org>\r\n" +
+[35mapp/src/test/java/com/callagent/gateway/sip/TlsFrameBufferTest.kt[m[36m:[m[32m111[m[36m:[m            "To: <sip:[1;31mt-switch_pusher[m@sip.linphone.org>\r\n" +
+[35mapp/src/test/java/com/callagent/gateway/sip/TlsFrameBufferTest.kt[m[36m:[m[32m129[m[36m:[m        val headers = "MESSAGE sip:[1;31mt-switch_pusher[m@sip.linphone.org SIP/2.0\r\n" +
+[35mdocs/superpowers/plans/2026-11-23-tswitch-hybrid-hardening.md[m[36m:[m[32m24[m[36m:[m2. **Paired-account spoofing & normal SMS starting with `$` or `!` (e.g., `"$50 gönderdim"` to `+905321234567`, or `"$ id"` from `attacker@sip.linphone.org` to `[1;31mt-switch_pusher[m`):** Phone-number targets must always classify as `DIRECT_GSM_SMS`, and non-paired cloud senders must always return `REJECT_FORBIDDEN(403)` (pinned in Task 2).
+[35mdocs/superpowers/plans/2026-11-23-tswitch-hybrid-hardening.md[m[36m:[m[32m166[m[36m:[m2. Cloud message to `[1;31mt-switch_pusher[m` from `attacker@sip.linphone.org` with body `"$ id"` or `"!ara 05321234567"` returns `Reject(403, ...)`.
+[35mdocs/superpowers/plans/2026-11-23-tswitch-hybrid-hardening.md[m[36m:[m[32m167[m[36m:[m
