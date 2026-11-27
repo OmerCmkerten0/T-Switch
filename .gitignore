@@ -1,10 +1,19 @@
 # Build outputs
 *.apk
+*.aab
 gateway-magisk.zip
+tswitch-magisk.zip
 magisk/system/priv-app/Gateway/
+magisk/system/priv-app/TSwitch/
 !magisk/system/priv-app/PermissionController/
 local.properties
 .env.build
+*.log
+*.tmp
+*.bak
+
+# Internal dev notes
+docs/superpowers/
 
 # Gradle
 .gradle/
