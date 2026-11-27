@@ -5,38 +5,40 @@
 # T-Switch
 ### T-Noktası GSM ↔ SIP Call Switcher
 
-**Root'lu bir Android telefonu 7/24 çalışan dijital GSM ↔ SIP köprüsüne dönüştürün.**  
-SIM kartınız yedek Android telefonda kalsın; tüm aramalarınızı ve SMS'lerinizi **iPhone (Linphone / Apple PushKit)** veya kendi SIP istemciniz üzerinden net, yankısız ve dijital sesle yönetin.
+**🇬🇧 English** · [🇹🇷 Türkçe](README.tr.md)
+
+**Turn a rooted Android phone into a 24/7 digital GSM ↔ SIP bridge.**  
+Keep your SIM card in a spare Android device and handle all your cellular calls and SMS directly from your **iPhone (Linphone / Apple PushKit)** or any SIP client — with clean, echo-free, end-to-end digital audio.
 
 ![Platform](https://img.shields.io/badge/Platform-Android%208.0%2B-34D399?style=flat-square&logo=android&logoColor=white)
-![Root](https://img.shields.io/badge/Gereksinim-Magisk%20Root-FF7A1A?style=flat-square)
-![Audio](https://img.shields.io/badge/Ses%20K%C3%B6pr%C3%BCs%C3%BC-G.722%2016kHz%20%2F%20G.711-3B82F6?style=flat-square)
-![SIP](https://img.shields.io/badge/Sinyalle%C5%9Fme-SIP%20TLS%20%2B%20PushKit-8B5CF6?style=flat-square)
-![License](https://img.shields.io/badge/Lisans-MIT-64748B?style=flat-square)
+![Root](https://img.shields.io/badge/Requires-Magisk%20Root-FF7A1A?style=flat-square)
+![Audio](https://img.shields.io/badge/Audio%20Bridge-G.722%2016kHz%20%2F%20G.711-3B82F6?style=flat-square)
+![SIP](https://img.shields.io/badge/Signalling-SIP%20TLS%20%2B%20PushKit-8B5CF6?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-64748B?style=flat-square)
 
 </div>
 
 ---
 
-## Örnek Ekran Görüntüleri
+## Screenshots
 
 <div align="center">
 <table>
   <tr>
     <td align="center">
-      <img src="docs/images/screen-home.png" width="235" alt="T-Switch Ana Ekran" /><br/>
-      <b>1. Ana Ekran &amp; Canlı Sistem Paneli</b><br/>
-      <sub>Kayıt/TLS durumu, LTE &amp; Wi-Fi sinyali, PushKit özeti ve çağrı/SMS geçmişi</sub>
+      <img src="docs/images/screen-home.png" width="235" alt="T-Switch Home Screen" /><br/>
+      <b>1. Home &amp; Live Dashboard</b><br/>
+      <sub>Registration/TLS badges, LTE &amp; Wi-Fi signal, PushKit summary, and call/SMS history</sub>
     </td>
     <td align="center">
-      <img src="docs/images/screen-settings.png" width="235" alt="T-Switch Ayarlar ve PushKit" /><br/>
-      <b>2. Ayarlar &amp; Linphone PushKit</b><br/>
-      <sub>Apple PushKit uyandırıcı, SIP hesap ayarları ve tek tık PushKit testi</sub>
+      <img src="docs/images/screen-settings.png" width="235" alt="T-Switch Settings and PushKit" /><br/>
+      <b>2. Settings &amp; Linphone PushKit</b><br/>
+      <sub>Apple PushKit wake-up config, SIP credentials, and one-tap PushKit test</sub>
     </td>
     <td align="center">
-      <img src="docs/images/screen-dialer.png" width="235" alt="T-Switch Tuş Takımı" /><br/>
-      <b>3. Telefon &amp; SMS Tuş Takımı</b><br/>
-      <sub>Doğrudan GSM arama, hızlı SMS gönderimi ve alt gezinme çubuğu</sub>
+      <img src="docs/images/screen-dialer.png" width="235" alt="T-Switch Dialer" /><br/>
+      <b>3. Local Dialer &amp; Quick SMS</b><br/>
+      <sub>Direct GSM calling, quick SMS composer, and bottom navigation</sub>
     </td>
   </tr>
 </table>
@@ -44,212 +46,211 @@ SIM kartınız yedek Android telefonda kalsın; tüm aramalarınızı ve SMS'ler
 
 ---
 
-## T-Switch Nedir ve Ne İşe Yarar?
+## What is T-Switch?
 
-Yanınızda iki telefon taşımak istemiyorsanız, yedek hattınızı (veya yurt dışı / şirket / ikinci SIM kartınızı) evde ya da çantanızda duran **root'lu bir Android cihaza** takıp **T-Switch** ile ana telefonunuza bağlayabilirsiniz.
+If you don't want to carry two phones, you can leave your secondary SIM (personal, travel, work, or roaming SIM) inside a **rooted Android phone** at home or in your bag and bridge it to your main phone with **T-Switch**.
 
-- **Gelen Aramalar:** Android'deki SIM karta bir arama geldiğinde T-Switch, iPhone'daki Linphone uygulamasını **Apple PushKit** ile ekran kilitli olsa bile anında uyandırır ve çaldırır. Aramayı açtığınızda ses iki yönlü olarak tamamen dijital şekilde aktarılır.
-- **Giden Aramalar:** iPhone'daki sohbet ekranına `!ara 05xx...` veya `!ara Ahmet` yazmanız yeterlidir. Önce sizin telefonunuz çalar, açtığınızda Android cihaz karşı tarafı GSM hattından arar ve sesi birleştirir.
-- **Çift Yönlü SMS:** Banka doğrulama kodları dahil gelen tüm SMS'ler anında Linphone'a düşer. `!sms Ahmet Yoldayım` yazarak SIM kartınızdan gerçek GSM SMS gönderebilirsiniz.
-- **Sessiz ve Yankısız Dijital Ses:** Hoparlör ile mikrofon arasında ses çalma gibi ilkel yöntemler kullanmaz. Doğrudan işlemcinin ses yolundan (ALSA / `Incall_Music` / `VOICE_DOWNLINK`) dijital veri okur ve yazar; Android cihazın hoparlörü ve mikrofonu tamamen sessiz kalır.
+- **Incoming Calls (Even with Locked Screen):** When a GSM call arrives, T-Switch wakes your iPhone's Linphone app instantly via **Apple PushKit (SIP TLS 5061)**. Once you answer, audio is bridged digitally in both directions.
+- **Outgoing Calls (`!ara`):** Send `!ara +1555...` or `!ara John` from your Linphone chat. T-Switch rings your iPhone first; as soon as you pick up, it dials the destination over GSM and bridges the call.
+- **Two-Way SMS:** Incoming GSM SMS messages (including bank 2FA codes) are forwarded to Linphone immediately. Reply or send new SMS messages over your SIM card with `!sms John On my way`.
+- **Silent, Echo-Free Digital Audio:** No speaker-to-microphone acoustic coupling. T-Switch reads and injects audio directly through the modem's digital paths (`VOICE_DOWNLINK` & ALSA `Incall_Music`), keeping the Android phone's physical speaker and microphone completely silent.
 
 ---
 
-## Sistem Nasıl Çalışır?
+## Architecture
 
 ```text
                        ┌───────────────────────────────────────────┐
-                       │         T-Switch (Root'lu Android)        │
-  GSM Şebekesi         │                                           │        Bulut / Yerel Ağ
+                       │          T-Switch (Rooted Android)        │
+  Cellular Network     │                                           │       Cloud / Local Network
  ┌────────────┐  SIM   │  GsmCallService ──▶ CallOrchestrator      │  TLS   ┌──────────────────┐
- │  Arayan /  │◄──────►│        │                  │               │◄──────►│  SIP Sunucusu    │
- │  SMS Ağı   │  Modem │  VOICE_DOWNLINK     SipClient / RTP       │  5061  │  (Linphone vb.)  │
+ │  Caller /  │◄──────►│        │                  │               │◄──────►│    SIP Server    │
+ │  SMSC      │  Modem │  VOICE_DOWNLINK     SipClient / RTP       │  5061  │  (Linphone etc.) │
  └────────────┘        │  libalsaplay.so     PushWakeController    │  UDP   └────────┬─────────┘
                        │  (ALSA Incall_Music & CVP TX Mute)        │  5060           │ PushKit /
                        │        │                  │               │                 │ SIP / RTP
                        │  SmsReceiver/Outbox  LocalSendController  │        ┌────────▼─────────┐
                        └───────────────────────────────────────────┘        │  iPhone / SIP    │
-                                                                            │  İstemcisi       │
-                                                                            │  (Linphone vb.)  │
+                                                                            │  Client          │
+                                                                            │  (Linphone etc.) │
                                                                             └──────────────────┘
 ```
 
-### Çalışma Modları
+### Operating Modes
 
-| Mod | Nasıl Bağlanır? | Ne Zaman Tercih Edilmeli? |
+| Mode | Connection | Best For |
 | --- | --- | --- |
-| **Bulut Modu** *(Varsayılan)*<br>`CLOUD_ONLY_LINPHONE` | `sip.linphone.org:5061` (TLS) + Apple PushKit | İki cihaz farklı ağlardayken (evdeki Wi-Fi ↔ mobil veri) 7/24 kesintisiz kullanım için. |
-| **Hibrit Yerel Mod**<br>`HYBRID_LOCAL_IP` | Hotspot / LAN sabit IP (`192.168.1.85:5060`, `tswitch.local`) + gerekirse PushKit | İki telefon aynı Wi-Fi veya hotspot üzerindeyken en düşük gecikme için. |
-| **Özel SIP Sunucu Modu**<br>`CUSTOM_SIP_WITH_PUSH_WAKE` | Kendi Asterisk / FreePBX sunucunuz (UDP/TLS + isteğe bağlı SRTP) | Kendi VoIP santraliniz veya sesli asistan altyapınız varsa. |
+| **Cloud Mode** *(Default)*<br>`CLOUD_ONLY_LINPHONE` | `sip.linphone.org:5061` (TLS) + Apple PushKit | 24/7 use across different networks (home Wi-Fi ↔ cellular data). |
+| **Hybrid Local Mode**<br>`HYBRID_LOCAL_IP` | Fixed LAN/Hotspot IP (`192.168.1.85:5060`, `tswitch.local` mDNS) + PushKit wake | Lowest latency when both phones share the same Wi-Fi or hotspot. |
+| **Custom SIP Server Mode**<br>`CUSTOM_SIP_WITH_PUSH_WAKE` | Your own Asterisk / FreePBX server (UDP/TLS + optional SDES SRTP) | Self-hosted PBX or voice-agent integrations. |
 
 ---
 
-## Hangi Cihazlarda Çalışır? Hangi Cihazlarda Çalışmaz?
+## Device Compatibility — What Works & What Doesn't
 
-T-Switch'in kalbi, GSM araması sırasında sesi **dijital olarak modemden okuyabilmek** ve **modeme geri enjekte edebilmektir**. Android'de bu özellik işlemciye (SoC) ve ses yongasına doğrudan bağlıdır.
+T-Switch relies on **reading cellular downlink audio digitally** and **injecting SIP audio directly into the modem uplink**. On Android, this depends heavily on the SoC (chipset) and audio HAL.
 
-### ✅ Hazır Profilli ve Desteklenen Cihazlar
+### ✅ Built-in Tested Profiles
 
-Aşağıdaki cihazlar için `DeviceProfile.kt` içinde özel ses mikseri ve enjeksiyon profilleri hazırdır:
+Dedicated ALSA/mixer profiles are included in `DeviceProfile.kt`:
 
-| Cihaz / Aile | İşlemci (SoC) | Durum | Ses Yolu Detayı |
+| Device / Family | SoC | Status | Audio Path Details |
 | --- | --- | --- | --- |
-| **General Mobile GM 8** *(Birincil Hedef)* | Qualcomm **MSM8937 / MSM8940 / MSM8953** (Snapdragon 430/435/625) | **Tam Optimize ✅** | Dahili `libalsaplay.so` + atomik `libtinyalsa.so` ile `/dev/snd/pcmC0D12p` (`Incall_Music`) enjeksiyonu ve CVP TX mikrofon susturma. |
-| **Poco X3 / X3 NFC & Google Pixel 4a** | Qualcomm **SM6150 / SM7150** (Snapdragon 675/730G/732G) | **Destekleniyor ✅** | WCD9375 codec ve `Incall_Music` DSP yolu + `halCallActiveVsids` desteği. |
-| **Samsung Galaxy S4 Mini** | Qualcomm **MSM8930** (WCD9304) | **Destekleniyor ✅** | `Incall_Music` ve dijital `VOICE_DOWNLINK` profili. |
-| **Samsung Galaxy S10e** | Samsung **Exynos 9820** (`SM-G970`) | **Özel Profil ✅** | ABOX/Exynos ses mikseri profili. |
+| **General Mobile GM 8** *(Primary Target)* | Qualcomm **MSM8937 / MSM8940 / MSM8953** (Snapdragon 430/435/625) | **Fully Optimized ✅** | Bundled `libalsaplay.so` + atomic `libtinyalsa.so` direct PCM injection to `/dev/snd/pcmC0D12p` (`Incall_Music`) with CVP TX mic mute. |
+| **Poco X3 / X3 NFC & Google Pixel 4a** | Qualcomm **SM6150 / SM7150** (Snapdragon 675/730G/732G) | **Supported ✅** | WCD9375 codec, `Incall_Music` DSP path, and `halCallActiveVsids` activation. |
+| **Samsung Galaxy S4 Mini** | Qualcomm **MSM8930** (WCD9304) | **Supported ✅** | `Incall_Music` + digital `VOICE_DOWNLINK` profile. |
+| **Samsung Galaxy S10e** | Samsung **Exynos 9820** (`SM-G970`) | **Custom Profile ✅** | ABOX/Exynos mixer profile. |
 
-### 🟡 Çalışabilecek Diğer Cihazlar
+### 🟡 Other Compatible Devices
 
-- **Diğer Root'lu Qualcomm Snapdragon Android Telefonlar:** T-Switch, tanımadığı Qualcomm işlemcilerde otomatik olarak `Generic Qualcomm` profiline geçer ve `Incall_Music Audio Mixer MultiMedia1/2` yollarını dener.
-- Özellikle **Snapdragon 4xx / 6xx / 7xx / 8xx** serisi, bootloader kilidi açılabilen ve Magisk ile root'lanabilen cihazların (Xiaomi, Redmi, Poco, eski Pixel, OnePlus, Motorola, GM vb.) çoğunda doğrudan çalışır ya da birkaç `tinymix` kontrol adı eklenerek kolayca uyarlanabilir.
+- **Other Rooted Qualcomm Snapdragon Android Phones:** Unknown Qualcomm devices automatically fall back to the `Generic Qualcomm` profile (`Incall_Music Audio Mixer MultiMedia1/2`).
+- Most **Snapdragon 4xx / 6xx / 7xx / 8xx** phones with an unlockable bootloader and Magisk root (Xiaomi, Redmi, Poco, older Pixels, OnePlus, Motorola, GM, etc.) either work out of the box or only need a few `tinymix` control names added to `DeviceProfile.kt`.
 
-### ❌ Çalışamayacak Cihazlar ve Basit Nedenleri
+### ❌ Unsupported Devices & Why They Don't Work
 
-Aşağıdaki cihazlarda T-Switch **çalışmaz** veya ses **tek yönlü / sessiz** kalır:
+T-Switch will **not work** (or will produce one-way / silent audio) on:
 
-1. **Root (Magisk) Olmayan Tüm Android Telefonlar**
-   - *Neden?* Android, güvenlik gereği normal uygulamaların telefon görüşmesinin iç sesini dinlemesine (`CAPTURE_AUDIO_OUTPUT`) ve ses mikserine (`tinymix` / `/dev/snd/pcm*`) yazmasına kesinlikle izin vermez. Root olmadan dijital köprü kurulamaz.
-2. **MediaTek (Helio / Dimensity), Huawei Kirin, Google Tensor ve Unisoc İşlemcili Cihazlar**
-   - *Neden?* Bu işlemciler Qualcomm'un standart `Incall_Music` dijital ses enjeksiyon yolunu kullanmaz; kapalı ve üreticiye özel ses mimarilerine sahiptir. Karşı tarafa ses göndermeye çalışıldığında ses ya cihazın kendi hoparlöründen dışarı çıkar ya da karşıya hiç ulaşmaz.
-3. **Çoğu Samsung Exynos Modeli** *(S10e Exynos 9820 hariç)*
-   - *Neden?* Exynos modellerinde modem ses yolları (ABOX) modele göre büyük farklılık gösterir ve standart `Incall_Music` kontrolü bulunmaz; cihaz bazlı tersine mühendislik yapılmadan ses enjeksiyonu çalışmaz.
-4. **Bootloader Kilidi Açılamayan Cihazlar** *(örn. güncel Huawei/Honor modelleri, operatör kilitli telefonlar)*
-   - *Neden?* Bootloader açılmadan Magisk root ve ayrıcalıklı sistem uygulaması (`priv-app`) kurulamaz.
-5. **VoLTE / IMS Sürücüsü Ses Yakalamayı Kilitleyen Bazı Stok ROM'lar**
-   - *Neden?* Bazı üretici ROM'larında VoLTE açıkken modem `VOICE_DOWNLINK` kanalını sıfır (sessiz) verir. Bu durumda VoLTE kapatılarak (3G/2G) veya LineageOS gibi temiz bir AOSP ROM kurularak sorun çoğu zaman aşılabilir.
-6. **iPhone / iOS Cihazlar (Köprü / Gateway Tarafı Olarak)**
-   - *Neden?* iOS, GSM modem sesine veya ALSA katmanına erişime izin vermez. iPhone bu sistemde **köprü** değil, **alıcı (Linphone istemcisi)** olarak kullanılır.
+1. **Any Non-Rooted Android Phone**
+   - *Why?* Android blocks regular apps from reading in-call audio (`CAPTURE_AUDIO_OUTPUT`) and touching kernel ALSA mixers (`/dev/snd/pcm*`, `tinymix`). Without Magisk root, a digital audio bridge is impossible.
+2. **MediaTek (Helio / Dimensity), Huawei Kirin, Google Tensor & Unisoc Devices**
+   - *Why?* These chipsets do not expose Qualcomm's standard `Incall_Music` DSP uplink mixer. They use proprietary audio architectures where injected audio either plays out of the phone's loudspeaker or never reaches the remote caller.
+3. **Most Samsung Exynos Models** *(except S10e Exynos 9820)*
+   - *Why?* Exynos ABOX audio routing differs drastically per model and lacks a standard `Incall_Music` path, requiring per-device reverse engineering.
+4. **Phones with Permanently Locked Bootloaders** *(e.g., modern Huawei/Honor or carrier-locked models)*
+   - *Why?* Magisk root and `priv-app` privileged permissions cannot be installed.
+5. **Stock ROMs Where VoLTE / IMS Blocks Downlink Capture**
+   - *Why?* Some vendor ROMs output digital silence on `VOICE_DOWNLINK` during VoLTE calls. Disabling VoLTE (falling back to 3G/2G) or flashing a clean AOSP ROM (such as LineageOS) often resolves this.
+6. **iPhone / iOS as the Gateway Device**
+   - *Why?* iOS provides no access to modem audio or ALSA mixers. In T-Switch, the iPhone is the **client/receiver** (Linphone), not the GSM gateway.
 
-> **Hızlı Uygunluk Kontrolü:** Elinizdeki yedek telefon **Qualcomm Snapdragon** işlemcili, **Android 8.0+**, **bootloader kilidi açılabilir** ve **Magisk root** kurulabilir bir cihazsa T-Switch için çok yüksek ihtimalle uygundur.
+> **Quick Check:** If your spare phone has a **Qualcomm Snapdragon** chipset, runs **Android 8.0+**, has an **unlockable bootloader**, and supports **Magisk root**, it is a strong candidate for T-Switch.
 
 ---
 
-## T-Switch Terminal Komutları
+## Remote Terminal Commands (SIP MESSAGE)
 
-Eşleştirdiğiniz SIP hesabından (ör. iPhone Linphone sohbet ekranından) aşağıdaki komutları mesaj olarak gönderebilirsiniz:
+Send any of these commands directly from your paired SIP client (e.g., iPhone Linphone chat):
 
-| Komut | Açıklama |
+| Command | Action |
 | --- | --- |
-| `!ara <numara veya ad>` | Önce iPhone'u çaldırır; açtığınızda GSM hattından numarayı veya rehberdeki kişiyi arar. |
-| `!sms <numara veya ad> <mesaj>` | Belirtilen numaraya veya rehberdeki kişiye GSM SMS gönderir. |
-| `!geneldurum` / `!durum` | Batarya, sıcaklık, şebeke sinyali, IP, SIP ve PushKit özetini gönderir. |
-| `!batarya` | Pil yüzdesi, şarj durumu, voltaj ve sıcaklık detayını gösterir. |
-| `!ekran ac` / `!ekran kapat` | Android cihazın ekranını uzaktan açar veya kapatır. |
-| `!kiosk ac` / `!kiosk kapat` | Kiosk / launcher ve güç tasarruf modunu yönetir. |
-| `!internet` | Mobil veri / hotspot internet paylaşımını açıp kapatır. |
-| `!gb` | Operatör kalan internet/paket sorgusu (SMS) tetikler. |
-| `!snoop` | Aktif aramada Android cihaz hoparlöründen canlı dinlemeyi açar/kapatır. |
-| `!push` / `!push test` | PushKit durumunu gösterir veya iPhone'a uyandırma testi gönderir. |
-| `!yardim` | Tüm yerleşik ve özel komutların listesini döner. |
-| `$ <komut>` | Yalnızca yetkili gönderen için root shell komutu çalıştırır. |
+| `!ara <number or contact>` | Initiates an iPhone-first callback and dials the number or matched contact over GSM. |
+| `!sms <number or contact> <text>` | Sends an outbound GSM SMS to the number or matched contact. |
+| `!geneldurum` / `!durum` | Returns battery, temperature, cellular signal, IP, SIP, and PushKit status. |
+| `!batarya` | Detailed battery percentage, charging state, voltage, and temperature. |
+| `!ekran ac` / `!ekran kapat` | Remotely turns the Android screen on or off. |
+| `!kiosk ac` / `!kiosk kapat` | Toggles Kiosk / launcher power-saving mode. |
+| `!internet` | Toggles mobile data / hotspot sharing. |
+| `!gb` | Triggers carrier remaining-data SMS query. |
+| `!snoop` | Toggles live speaker monitoring on the gateway during a call (mic stays muted). |
+| `!push` / `!push test` | Shows PushKit status or sends a test wake signal to your iPhone. |
+| `!yardim` | Lists all built-in and user-defined custom commands. |
+| `$ <shell command>` | Runs a root shell command (strictly restricted to the authorized paired sender). |
 
 ---
 
-## Öne Çıkan Diğer Özellikler
+## Additional Features
 
-- **7/24 Kiosk & Güç Yönetimi:** Ekranı kapalı tutar, gereksiz sistem paketlerini tek tuşla dondurabilir (`Debloat`), pil kritik eşiğin (varsayılan `%15`) altına indiğinde her `%1` düşüşte SMS hakkı harcamadan SIP uyarısı yollar.
-- **Kesintisiz SMS Kuyruğu:** İnternet kopukken gelen GSM SMS'leri diskte saklanır (`SmsStore`); bağlantı geldiği anda sırayla iletilir.
-- **Yerel Yedek Telefon (Fallback):** iPhone'a veya SIP istemcisine ulaşılamazsa gelen arama Android cihazın ekranında çalarak doğrudan cevaplanabilir; ayrıca uygulama içinde tuş takımı ve rehber sekmesi vardır.
-- **Otomatik Açılış & İzin Koruma:** `BootReceiver` cihaz yeniden başladığında `RECORD_AUDIO` appops iznini root ile yeniler ve köprüyü otomatik başlatır.
+- **24/7 Kiosk & Battery Protection:** Keeps the display off, supports one-tap `Debloat`, and sends free SIP low-battery alerts for every 1% drop below your configured threshold (default `15%`) when unplugged.
+- **Reliable SMS Queue:** Incoming GSM SMS messages are persisted to disk (`SmsStore`) while offline and automatically flushed once SIP re-registers.
+- **Local Fallback Phone UI:** If the SIP client is unreachable, incoming GSM calls ring directly on the Android screen so you can answer locally; includes a built-in dialer and contacts tab.
+- **Cold-Boot Self-Healing:** `BootReceiver` automatically restores `RECORD_AUDIO` appops via root on boot and brings the gateway online unattended.
 
 ---
 
-## Derleme ve Kurulum
+## Build & Installation
 
-### 1. Gereksinimler
-- **JDK 17** *(Android Gradle Plugin 8.2.2 için gereklidir; Java 8 ile derlenmez)*
-- **Android SDK (API 34)** ve **Android NDK** (`alsaplay.c` native derlemesi için)
-- Root'lu Android cihaz (**Magisk** önerilir)
+### 1. Prerequisites
+- **JDK 17** *(required by Android Gradle Plugin 8.2.2; Java 8 will fail)*
+- **Android SDK (API 34)** & **Android NDK** (for compiling `alsaplay.c`)
+- Rooted Android device (**Magisk** recommended)
 
-### 2. Test ve APK Derleme (Windows PowerShell)
+### 2. Run Tests & Build APK (Windows PowerShell)
 
 ```powershell
-# Gerekirse bu oturum için JDK 17 yolunu gösterin
+# Point this shell session to JDK 17 (e.g., Android Studio's bundled JBR)
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
-# Birim testlerini çalıştırın
+# Run unit tests
 .\gradlew.bat testDebugUnitTest --no-daemon
 
-# Debug APK derleyin
+# Build Debug APK
 .\gradlew.bat assembleDebug --no-daemon
 ```
 
-APK çıktısı `app/build/outputs/apk/debug/app-debug.apk` konumunda oluşur.
+The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-### 3. Cihaza Kurulum
-- `CAPTURE_AUDIO_OUTPUT` ayrıcalıklı izni için `magisk/` klasöründeki Magisk modülü ile uygulamayı sistem (`priv-app`) olarak kurmanız önerilir.
-- Kurulum sonrası T-Switch'i (`com.tnoktasi.tswitch`) **Varsayılan Telefon Uygulaması (Default Dialer)** olarak seçin ve Magisk'ten **root izni** verin.
-- Güncellemelerde hızlı yükleme için:
+### 3. Install on Device
+- Flash the Magisk module in `magisk/` so `com.tnoktasi.tswitch` is installed as a privileged system app (`priv-app`) with `CAPTURE_AUDIO_OUTPUT`.
+- Set **T-Switch** (`com.tnoktasi.tswitch`) as the **Default Phone App (Dialer)** and grant **Magisk superuser** permission.
+- For quick subsequent updates:
   ```powershell
   adb install -r app\build\outputs\apk\debug\app-debug.apk
   ```
 
-### 4. İlk Yapılandırma (5 Dakikada Hazır)
+### 4. First-Time Setup (5 Minutes)
 
-> **Gizlilik Notu:** Kaynak kodda herhangi bir kişisel SIP hesabı, şifre veya telefon numarası gömülü **değildir**. Tüm bilgiler yalnızca kendi cihazınızda saklanır.
+> **Privacy Note:** Zero personal SIP accounts, passwords, or phone numbers are hardcoded in the repository. All credentials are stored locally in `SharedPreferences` on your device.
 
-1. Ücretsiz iki SIP hesabı oluşturun (ör. `sip.linphone.org` üzerinde bir **Gönderici / Gateway** hesabı, bir **Alıcı / iPhone** hesabı).
-2. iPhone'da **Linphone** uygulamasını açıp **Alıcı** hesabınızla giriş yapın ve Push bildirimlerinin açık olduğundan emin olun.
-3. Android'de **T-Switch → Ayarlar → Linphone Hibrit PushKit** bölümüne gidin:
+1. Create two free SIP accounts (e.g., on `sip.linphone.org`: one **Gateway / Pusher** account and one **iPhone / Receiver** account).
+2. Sign in to **Linphone** on your iPhone with the **Receiver** account and ensure Push notifications are enabled.
+3. On Android, open **T-Switch → Settings → Linphone Hybrid PushKit** and enter:
    - **Linphone SIP Domain:** `sip.linphone.org`
-   - **Gateway Gönderici Hesabı (Pusher):** kendi gönderici kullanıcı adınız
-   - **Gönderici SIP Şifresi:** gönderici hesabınızın şifresi
-   - **iPhone Alıcı Hesabı (Receiver):** iPhone'daki alıcı kullanıcı adınız
-4. **Push Kaydet** butonuna basın.
-5. **PushKit Test** ile iPhone'un ekranı kilitliyken bile çaldığını doğrulayın — sistem kullanıma hazır!
+   - **Gateway Pusher Account:** your gateway SIP username
+   - **Pusher SIP Password:** your gateway SIP password
+   - **iPhone Receiver Account:** your iPhone SIP username
+4. Tap **Push Kaydet** (Save).
+5. Tap **PushKit Test** and confirm your iPhone rings even with the screen locked — you're live!
 
 ---
 
-## Sık Sorulan Sorular & Hızlı Sorun Giderme
+## Troubleshooting & FAQ
 
-- **Gradle derlerken `compatible with Java 8 ... compatible with Java 11` hatası alıyorum:**  
-  Terminalinizde Java 8 seçilidir. `$env:JAVA_HOME` değişkenini JDK 17'ye (veya Android Studio'nun `jbr` klasörüne) yönlendirip tekrar deneyin.
-- **Gelen aramada karşı tarafın sesini duyuyorum ama benim sesim gitmiyor:**  
-  Cihazın root erişimini, Magisk `priv-app` kurulumunu ve `DeviceProfile` eşleşmesini (`Ayarlar → Loglar` ekranından) kontrol edin. GM 8 (`msm8937`) dışındaki bir Qualcomm cihazda `tinymix` yolları farklı olabilir.
-- **iPhone ekranı kapalıyken çağrı düşmüyor:**  
-  iPhone Linphone ayarlarında Push bildirimlerinin açık olduğunu ve T-Switch'te **PushKit Test** butonunun `180 Ringing` döndürdüğünü doğrulayın.
-
----
-
-## Güvenlik ve Gizlilik
-
-- **Yetkili Gönderen Kontrolü (`CommandAuthorization`):** Bulut üzerinden gelen `!ara`, `!sms`, terminal ve `$ <komut>` istekleri yalnızca tanımladığınız eşleşmiş **Alıcı** hesabından ve izin verilen SIP alan adından gelirse işlenir; diğer tüm gönderenler `403 Forbidden` ile reddedilir.
-- **Şifreli Sinyalleşme:** Bulut modunda SIP trafiği TLS (`5061`) üzerinden taşınır; Özel SIP Sunucu modunda TLS + SDES SRTP (RFC 3711) desteklenir.
+- **Gradle fails with `compatible with Java 8 ... compatible with Java 11`:**  
+  Your terminal is using Java 8. Set `JAVA_HOME` to JDK 17 (or Android Studio's `jbr`) and re-run.
+- **I can hear the caller, but they cannot hear my voice:**  
+  Verify Magisk root access, `priv-app` installation, and check `Settings → Logs` to confirm your `DeviceProfile` matched properly. Non-GM 8 Qualcomm devices may require custom `tinymix` control names.
+- **iPhone doesn't ring when the screen is locked:**  
+  Confirm Push notifications are enabled in iPhone Linphone settings and that **PushKit Test** receives `180 Ringing`.
 
 ---
 
-## Proje Yapısı
+## Security & Privacy
+
+- **Strict Sender Authorization (`CommandAuthorization`):** Cloud `!ara`, `!sms`, terminal, and `$ <cmd>` requests are only accepted if BOTH the SIP username and SIP domain match your configured **Receiver** account; all other senders receive `403 Forbidden`.
+- **Encrypted Signalling & Media:** Cloud mode runs SIP over **TLS (5061)**; Custom SIP Server mode supports **TLS + SDES SRTP (RFC 3711)**.
+
+---
+
+## Project Structure
 
 ```text
 T-Switch/
 ├── app/
 │   └── src/
 │       ├── main/
-│       │   ├── cpp/alsaplay.c                  # Root ALSA PCM uplink enjeksiyonu (libalsaplay.so)
+│       │   ├── cpp/alsaplay.c                  # Root ALSA PCM uplink injector (libalsaplay.so)
 │       │   ├── java/com/tnoktasi/tswitch/
-│       │   │   ├── MainActivity.kt             # Ana panel, ayarlar, tuş takımı, rehber, yerel arama UI
-│       │   │   ├── DeviceProfile.kt            # Cihaz & SoC bazlı ALSA/tinymix ses profilleri
-│       │   │   ├── audio/                      # AlsaPcmPlayback, G711, G722, RtpSession
-│       │   │   ├── bridge/                     # CallOrchestrator (çağrı yaşam döngüsü)
+│       │   │   ├── MainActivity.kt             # Dashboard, settings, dialer, contacts, local fallback UI
+│       │   │   ├── DeviceProfile.kt            # Per-SoC ALSA / tinymix audio routing profiles
+│       │   │   ├── bridge/                     # CallOrchestrator (GSM ↔ SIP call state machine)
 │       │   │   ├── gsm/                        # GsmCallService, GsmCallManager
 │       │   │   ├── localsend/                  # PushWakeController, LocalSendController, CommandAuthorization,
 │       │   │   │                               # KioskController, HotspotHelper, LocalIpPinController, mDNS
-│       │   │   ├── service/                    # GatewayService, BootReceiver, RoutingPolicy
-│       │   │   ├── sip/                        # SipClient, TlsSipTransport, SipAuth, SipBuilder
+│       │   │   ├── rtp/                        # AlsaPcmPlayback, G722Codec, PcmuCodec, RtpSession, Srtp
+│       │   │   ├── service/                    # GatewayService, BootReceiver, CallLogStore
+│       │   │   ├── sip/                        # SipClient, SipAuth, SipBuilder, SipMessage, SipTransport
 │       │   │   └── sms/                        # SmsReceiver, SmsSender, SmsStore, SmsOutbox
-│       │   └── res/                            # Arayüz yerleşimleri, ikonlar ve renk temaları
-│       └── test/                               # JVM birim testleri
-├── docs/images/                                # README örnek ekran görselleri
-├── magisk/                                     # Ayrıcalıklı izinler (priv-app) ve boot desteği
-└── README.md
+│       │   └── res/                            # Layouts, icons, dark/light themes
+│       └── test/                               # JVM unit tests
+├── docs/images/                                # README screenshots
+├── magisk/                                     # Magisk module for priv-app permissions & boot hooks
+├── README.md                                   # English documentation (default)
+└── README.tr.md                                # Turkish documentation
 ```
 
 ---
 
-## Lisans
+## License
 
-**T-Switch (T-Noktası GSM ↔ SIP Call Switcher)**, General Mobile GM 8 (`msm8937`) root ALSA ses enjeksiyonu, Apple PushKit hibrit bulut/yerel yönlendirme, Kiosk otomasyonu ve uzaktan komut terminali ile geliştirilmiş açık kaynaklı bir GSM ↔ SIP köprüsüdür.
-
-Lisans detayları için [LICENSE](LICENSE) dosyasına göz atabilirsiniz.
+Released under the **MIT License** — see [LICENSE](LICENSE) for details.
